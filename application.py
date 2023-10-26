@@ -2,7 +2,7 @@ from flask import Flask, request, jsonify, Response
 import jwt
 import datetime
 from pymongo import MongoClient
-from bson import json_util
+from bson import json_util, ObjectId
 from flask_cors import CORS
 import re
 import config
@@ -190,6 +190,24 @@ def clients():
 
     # Return the clients as a JSON response
     return clients_json, 200
+
+
+# Endpoint to delete client
+@application.route('/delete_client', methods=['POST'])
+def delete_client():
+    data = request.get_json()
+    client_id = data.get('client_id')
+
+    # Convert the client_id to ObjectId type
+    client_object_id = ObjectId(client_id)
+
+    # Find and delete the document by its ObjectId
+    result = clients_collection.delete_one({'_id': client_object_id})
+
+    if result.deleted_count == 1:
+        return jsonify({'message': 'Client deleted successfully'}), 200
+    else:
+        return jsonify({'message': 'Client not found'}), 404
 
 
 if __name__ == '__main__':
