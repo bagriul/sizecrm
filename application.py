@@ -6,6 +6,8 @@ from bson import json_util
 from flask_cors import CORS
 import re
 import config
+from datetime import datetime
+import base64
 
 application = Flask(__name__)
 CORS(application)
@@ -14,6 +16,7 @@ SECRET_KEY = config.SECRET_KEY
 client = MongoClient(config.MONGO_STRING)
 db = client['size_crm']
 users_collection = db['users']
+clients_collection = db['clients']
 
 
 @application.route('/', methods=['GET'])
@@ -127,6 +130,66 @@ def register():
     else:
         response = jsonify({'message': 'Unknown error'}), 401
         return response
+
+
+# Endpoint to add new client
+@application.route('/add_client', methods=['POST'])
+def add_client():
+    data = request.form.to_dict()  # Get form data including image
+    userpic = request.files.get('userpic')
+
+    name = data.get('name', None)
+    phone = data.get('phone', None)
+    additional_phone = data.get('additional_phone', None)
+    email = data.get('email', None)
+    gender = data.get('gender', None)
+    birthday = data.get('birthday', None)
+    instagram = data.get('instagram', None)
+    telegram = data.get('telegram', None)
+    comment = data.get('comment', None)
+    status = data.get('status', None)
+
+    # Process image file
+    if userpic:
+        userpic = base64.b64encode(userpic.read()).decode('utf-8')
+    else:
+        userpic = None
+
+    document = {
+        'name': name,
+        'phone': phone,
+        'additional_phone': additional_phone,
+        'email': email,
+        'gender': gender,
+        'birthday': datetime.strptime(birthday, '%d-%m-%Y'),
+        'instagram': instagram,
+        'telegram': telegram,
+        'comment': comment,
+        'status': status,
+        'userpic': userpic  # Store the image data as base64 string
+    }
+
+    is_present = clients_collection.find_one({'phone': phone})
+    if is_present is None:
+        clients_collection.insert_one(document)
+        response = jsonify({'message': 'Client created successfully'}), 200
+        return response
+    else:
+        response = jsonify({'message': 'Client already exists'}), 409
+        return response
+
+
+# Endpoint to get clients list
+@application.route('/clients', methods=['GET'])
+def clients():
+    # Retrieve all clients from the MongoDB collection
+    clients = list(clients_collection.find())
+
+    # Convert BSON documents to JSON format
+    clients_json = json_util.dumps(clients)
+
+    # Return the clients as a JSON response
+    return clients_json, 200
 
 
 if __name__ == '__main__':
