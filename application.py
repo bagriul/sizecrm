@@ -7,6 +7,7 @@ import re
 import config
 from datetime import datetime, timedelta
 import base64
+import json
 
 application = Flask(__name__)
 CORS(application)
@@ -411,9 +412,10 @@ def new_status():
         return response
 
     status = data.get('status')
+    colour = data.get('colour')
     is_present = statuses_collection.find_one({'status': status})
     if is_present is None:
-        statuses_collection.insert_one({'status': status})
+        statuses_collection.insert_one({'status': status, 'colour': colour})
         return jsonify({'message': 'Created successfully'}), 200
     else:
         return jsonify({'message': 'Status already exists'}), 409
@@ -436,11 +438,12 @@ def get_statuses():
         response = jsonify({'message': 'Invalid token'}), 401
         return response
 
-    # Retrieve all documents from the collection
-    documents = list(statuses_collection.find())
-    # Extract values from documents and store them in a list
-    statuses = [document['status'] for document in documents]
-    return statuses
+    # Retrieve specific fields from all documents in the collection
+    documents = list(statuses_collection.find({}, {"status": 1, "colour": 1, "_id": 0}))
+
+    # Convert the list of documents to a JSON array
+    json_data = json.dumps(documents)
+    return json_data, 200
 
 
 if __name__ == '__main__':
