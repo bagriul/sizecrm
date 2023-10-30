@@ -23,18 +23,32 @@ def test():
     return 'SizeCRM API v1.0'
 
 
+def decode_access_token(access_token, secret_key):
+    try:
+        payload = jwt.decode(access_token, secret_key, algorithms=['HS256'])
+        return payload
+    except jwt.ExpiredSignatureError:
+        # Handle expired token
+        return None
+    except jwt.InvalidTokenError:
+        # Handle invalid token
+        return None
+
+
+def decode_refresh_token(refresh_token, secret_key):
+    try:
+        payload = jwt.decode(refresh_token, secret_key, algorithms=['HS256'])
+        return payload
+    except jwt.ExpiredSignatureError:
+        # Handle expired token
+        return None
+    except jwt.InvalidTokenError:
+        # Handle invalid token
+        return None
+
+
 # Sample function to verify access token
 def verify_access_token(access_token):
-    def decode_access_token(access_token, secret_key):
-        try:
-            payload = jwt.decode(access_token, secret_key, algorithms=['HS256'])
-            return payload
-        except jwt.ExpiredSignatureError:
-            # Handle expired token
-            return None
-        except jwt.InvalidTokenError:
-            # Handle invalid token
-            return None
     try:
         decoded_token = decode_access_token(access_token, SECRET_KEY)
         if decoded_token:
@@ -59,17 +73,6 @@ def verify_access_token(access_token):
 
 # Sample function to verify refresh token
 def verify_refresh_token(refresh_token):
-    def decode_refresh_token(refresh_token, secret_key):
-        try:
-            payload = jwt.decode(refresh_token, secret_key, algorithms=['HS256'])
-            return payload
-        except jwt.ExpiredSignatureError:
-            # Handle expired token
-            return None
-        except jwt.InvalidTokenError:
-            # Handle invalid token
-            return None
-
     try:
         decoded_token = decode_refresh_token(refresh_token, SECRET_KEY)
         if decoded_token:
@@ -174,6 +177,19 @@ def add_client():
     data = request.form.to_dict()  # Get form data including image
     userpic = request.files.get('userpic')
 
+    access_token = data.get('access_token')
+    if not access_token:
+        response = jsonify({'message': 'Access token is missing'}), 401
+        return response
+    try:
+        # Verify the JWT token
+        decoded_token = jwt.decode(access_token, SECRET_KEY, algorithms=['HS256'])
+    except jwt.ExpiredSignatureError:
+        response = jsonify({'message': 'Expired token'}), 401
+        return response
+    except jwt.InvalidTokenError:
+        response = jsonify({'message': 'Invalid token'}), 401
+        return response
     name = data.get('name', None)
     phone = data.get('phone', None)
     additional_phone = data.get('additional_phone', None)
@@ -216,9 +232,22 @@ def add_client():
 
 
 # Endpoint to get clients list
-@application.route('/clients', methods=['GET'])
+@application.route('/clients', methods=['POST'])
 def clients():
     data = request.get_json()
+    access_token = data.get('access_token')
+    if not access_token:
+        response = jsonify({'message': 'Access token is missing'}), 401
+        return response
+    try:
+        # Verify the JWT token
+        decoded_token = jwt.decode(access_token, SECRET_KEY, algorithms=['HS256'])
+    except jwt.ExpiredSignatureError:
+        response = jsonify({'message': 'Expired token'}), 401
+        return response
+    except jwt.InvalidTokenError:
+        response = jsonify({'message': 'Invalid token'}), 401
+        return response
     keyword = data.get('keyword')
     page = data.get('page', 1)  # Default to page 1 if not provided
     per_page = data.get('per_page', 10)  # Default to 10 items per page if not provided
@@ -252,6 +281,19 @@ def clients():
 def delete_client():
     data = request.get_json()
     client_id = data.get('client_id')
+    access_token = data.get('access_token')
+    if not access_token:
+        response = jsonify({'message': 'Access token is missing'}), 401
+        return response
+    try:
+        # Verify the JWT token
+        decoded_token = jwt.decode(access_token, SECRET_KEY, algorithms=['HS256'])
+    except jwt.ExpiredSignatureError:
+        response = jsonify({'message': 'Expired token'}), 401
+        return response
+    except jwt.InvalidTokenError:
+        response = jsonify({'message': 'Invalid token'}), 401
+        return response
 
     # Convert the client_id to ObjectId type
     client_object_id = ObjectId(client_id)
@@ -266,77 +308,87 @@ def delete_client():
 
 
 # Endpoint to edit client
-@application.route('/update_client/<client_id>', methods=['PUT'])
+@application.route('/update_client/<client_id>', methods=['POST'])
 def update_client(client_id):
+    data = request.form.to_dict()
+    access_token = data.get('access_token')
+    if not access_token:
+        response = jsonify({'message': 'Access token is missing'}), 401
+        return response
     try:
-        # Convert the client_id to ObjectId type
-        client_object_id = ObjectId(client_id)
+        # Verify the JWT token
+        decoded_token = jwt.decode(access_token, SECRET_KEY, algorithms=['HS256'])
+    except jwt.ExpiredSignatureError:
+        response = jsonify({'message': 'Expired token'}), 401
+        return response
+    except jwt.InvalidTokenError:
+        response = jsonify({'message': 'Invalid token'}), 401
+        return response
+    # Convert the client_id to ObjectId type
+    client_object_id = ObjectId(client_id)
 
-        # Retrieve the existing client document from MongoDB
-        existing_client = clients_collection.find_one({'_id': client_object_id})
+    # Retrieve the existing client document from MongoDB
+    existing_client = clients_collection.find_one({'_id': client_object_id})
 
-        if existing_client:
-            # Get data from the request
-            userpic = request.files.get('userpic')
-            data = request.form.to_dict()
+    if existing_client:
+        # Get data from the request
+        userpic = request.files.get('userpic')
+        data = request.form.to_dict()
 
-            # Update fields if new data is provided in the request
-            if 'name' in data:
-                existing_client['name'] = data['name']
-            if 'phone' in data:
-                existing_client['phone'] = data['phone']
-            if 'additional_phone' in data:
-                existing_client['additional_phone'] = data['additional_phone']
-            if 'email' in data:
-                existing_client['email'] = data['email']
-            if 'gender' in data:
-                existing_client['gender'] = data['gender']
-            if 'birthday' in data:
-                existing_client['birthday'] = data['birthday']
-            if 'instagram' in data:
-                existing_client['instagram'] = data['instagram']
-            if 'telegram' in data:
-                existing_client['telegram'] = data['telegram']
-            if 'comment' in data:
-                existing_client['comment'] = data['comment']
-            if 'status' in data:
-                existing_client['status'] = data['status']
+        # Update fields if new data is provided in the request
+        if 'name' in data:
+            existing_client['name'] = data['name']
+        if 'phone' in data:
+            existing_client['phone'] = data['phone']
+        if 'additional_phone' in data:
+            existing_client['additional_phone'] = data['additional_phone']
+        if 'email' in data:
+            existing_client['email'] = data['email']
+        if 'gender' in data:
+            existing_client['gender'] = data['gender']
+        if 'birthday' in data:
+            existing_client['birthday'] = data['birthday']
+        if 'instagram' in data:
+            existing_client['instagram'] = data['instagram']
+        if 'telegram' in data:
+            existing_client['telegram'] = data['telegram']
+        if 'comment' in data:
+            existing_client['comment'] = data['comment']
+        if 'status' in data:
+            existing_client['status'] = data['status']
 
-            # Update userpic if a new userpic is provided in the request
-            def process_and_store_userpic(userpic):
-                if userpic:
-                    try:
-                        # Read the image file as binary data
-                        image_data = userpic.read()
-
-                        # Encode the binary image data as base64
-                        base64_image = base64.b64encode(image_data).decode('utf-8')
-
-                        # Return the base64 encoded image data for MongoDB storage
-                        return base64_image
-
-                    except Exception as e:
-                        # Handle any potential errors while processing the image
-                        print(f"Error processing image: {str(e)}")
-                        return None
-
-                else:
-                    # Handle invalid or missing userpic files
-                    return None
+        # Update userpic if a new userpic is provided in the request
+        def process_and_store_userpic(userpic):
             if userpic:
-                existing_client['userpic'] = process_and_store_userpic(userpic)
+                try:
+                    # Read the image file as binary data
+                    image_data = userpic.read()
 
-            # Update the client document in MongoDB
-            clients_collection.find_one_and_update({'_id': client_object_id}, {'$set': existing_client})
+                    # Encode the binary image data as base64
+                    base64_image = base64.b64encode(image_data).decode('utf-8')
 
-            return jsonify({'message': 'Client updated successfully'}), 200
+                    # Return the base64 encoded image data for MongoDB storage
+                    return base64_image
 
-        else:
-            return jsonify({'message': 'Client not found'}), 404
+                except Exception as e:
+                    # Handle any potential errors while processing the image
+                    print(f"Error processing image: {str(e)}")
+                    return None
 
-    except Exception as e:
-        # Handle errors
-        return jsonify({'error': str(e)}), 500
+            else:
+                # Handle invalid or missing userpic files
+                return None
+
+        if userpic:
+            existing_client['userpic'] = process_and_store_userpic(userpic)
+
+        # Update the client document in MongoDB
+        clients_collection.find_one_and_update({'_id': client_object_id}, {'$set': existing_client})
+
+        return jsonify({'message': 'Client updated successfully'}), 200
+
+    else:
+        return jsonify({'message': 'Client not found'}), 404
 
 
 if __name__ == '__main__':
