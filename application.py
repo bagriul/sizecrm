@@ -16,6 +16,7 @@ client = MongoClient(config.MONGO_STRING)
 db = client['size_crm']
 users_collection = db['users']
 clients_collection = db['clients']
+statuses_collection = db['statuses']
 
 
 @application.route('/', methods=['GET'])
@@ -389,6 +390,57 @@ def update_client(client_id):
 
     else:
         return jsonify({'message': 'Client not found'}), 404
+
+
+# Endpoint to create new client status
+@application.route('/new_status', methods=['POST'])
+def new_status():
+    data = request.get_json()
+    access_token = data.get('access_token')
+    if not access_token:
+        response = jsonify({'message': 'Access token is missing'}), 401
+        return response
+    try:
+        # Verify the JWT token
+        decoded_token = jwt.decode(access_token, SECRET_KEY, algorithms=['HS256'])
+    except jwt.ExpiredSignatureError:
+        response = jsonify({'message': 'Expired token'}), 401
+        return response
+    except jwt.InvalidTokenError:
+        response = jsonify({'message': 'Invalid token'}), 401
+        return response
+
+    status = data.get('status')
+    is_present = statuses_collection.find_one({'status': status})
+    if is_present is None:
+        statuses_collection.insert_one({'status': status})
+        return jsonify({'message': 'Created successfully'}), 200
+    else:
+        return jsonify({'message': 'Status already exists'}), 409
+
+
+@application.route('/get_statuses', methods=['POST'])
+def get_statuses():
+    data = request.get_json()
+    access_token = data.get('access_token')
+    if not access_token:
+        response = jsonify({'message': 'Access token is missing'}), 401
+        return response
+    try:
+        # Verify the JWT token
+        decoded_token = jwt.decode(access_token, SECRET_KEY, algorithms=['HS256'])
+    except jwt.ExpiredSignatureError:
+        response = jsonify({'message': 'Expired token'}), 401
+        return response
+    except jwt.InvalidTokenError:
+        response = jsonify({'message': 'Invalid token'}), 401
+        return response
+
+    # Retrieve all documents from the collection
+    documents = list(statuses_collection.find())
+    # Extract values from documents and store them in a list
+    statuses = [document['status'] for document in documents]
+    return statuses
 
 
 if __name__ == '__main__':
