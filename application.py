@@ -450,5 +450,34 @@ def get_statuses():
     return json_data, 200
 
 
+@application.route('/client_info', methods=['POST'])
+def client_info():
+    data = request.get_json()
+    access_token = data.get('access_token')
+    if not access_token:
+        response = jsonify({'token': False}), 401
+        return response
+    try:
+        # Verify the JWT token
+        decoded_token = jwt.decode(access_token, SECRET_KEY, algorithms=['HS256'])
+    except jwt.ExpiredSignatureError:
+        response = jsonify({'token': False}), 401
+        return response
+    except jwt.InvalidTokenError:
+        response = jsonify({'token': False}), 401
+        return response
+
+    client_id = data.get('client_id')
+    object_id = ObjectId(client_id)
+    document = clients_collection.find_one({'_id': object_id})
+    if document:
+        # Convert ObjectId to string before returning the response
+        document['_id'] = str(document['_id'])
+        return document, 200
+    elif document is None:
+        response = jsonify({'message': 'Client not found'}), 404
+        return response
+
+
 if __name__ == '__main__':
     application.run()
