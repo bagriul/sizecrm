@@ -1,6 +1,6 @@
 from flask import Flask, request, jsonify, Response
 import jwt
-from pymongo import MongoClient
+from pymongo import MongoClient, ASCENDING, DESCENDING
 from bson import json_util, ObjectId
 from flask_cors import CORS
 import re
@@ -19,6 +19,7 @@ db = client['size_crm']
 users_collection = db['users']
 clients_collection = db['clients']
 statuses_collection = db['statuses']
+orders_collection = db['orders']
 
 
 @application.route('/', methods=['GET'])
@@ -477,6 +478,83 @@ def client_info():
     elif document is None:
         response = jsonify({'message': 'Client not found'}), 404
         return response
+
+
+# Endpoint to get clients list
+@application.route('/orders', methods=['POST'])
+def orders():
+    data = request.get_json()
+    access_token = data.get('access_token')
+    if not access_token:
+        response = jsonify({'token': False}), 401
+        return response
+    try:
+        # Verify the JWT token
+        decoded_token = jwt.decode(access_token, SECRET_KEY, algorithms=['HS256'])
+    except jwt.ExpiredSignatureError:
+        response = jsonify({'token': False}), 401
+        return response
+    except jwt.InvalidTokenError:
+        response = jsonify({'token': False}), 401
+        return response
+    email = data.get('email')
+    page = data.get('page', 1)  # Default to page 1 if not provided
+    per_page = data.get('per_page', 10)  # Default to 10 items per page if not provided
+    sort_date = data.get('sort_date')
+    sort_price = data.get('sort_price')
+
+    filter_criteria = {}
+    if email:
+        orders_collection.create_index([("$**", "text")])
+        filter_criteria['$text'] = {'$search': email}
+
+    # Count the total number of clients that match the filter criteria
+    total_orders = orders_collection.count_documents(filter_criteria)
+
+    total_pages = math.ceil(total_orders / per_page)
+
+    # Paginate the query results using skip and limit, and apply filters
+    skip = (page - 1) * per_page
+    documents = list(orders_collection.find(filter_criteria).skip(skip).limit(per_page))
+    if sort_date and sort_date == 'ASCENDING':
+        documents = list(orders_collection.find(filter_criteria).skip(skip).limit(per_page).sort("order_date", ASCENDING))
+    if sort_date and sort_date == 'DESCENDING':
+        documents = list(orders_collection.find(filter_criteria).skip(skip).limit(per_page).sort("order_date", DESCENDING))
+    if sort_price and sort_price == 'ASCENDING':
+        documents = list(orders_collection.find(filter_criteria).skip(skip).limit(per_page).sort("total_price", ASCENDING))
+    if sort_price and sort_price == 'DESCENDING':
+        documents = list(orders_collection.find(filter_criteria).skip(skip).limit(per_page).sort("total_price", DESCENDING))
+
+    # Calculate the range of clients being displayed
+    start_range = skip + 1
+    end_range = min(skip + per_page, total_orders)
+
+    if email:
+        total_price_sum = 0
+        latest_order_date = None
+
+        for document in documents:
+            if 'total_price' in document:
+                total_price_sum += document['total_price']
+            if 'order_date' in document:
+                if latest_order_date is None or document['order_date'] > latest_order_date:
+                    latest_order_date = document['order_date']
+
+        # Serialize the documents using json_util from pymongo and specify encoding
+        response = Response(json_util.dumps(
+            {'orders': documents, 'total_orders': total_orders, 'start_range': start_range, 'end_range': end_range,
+                'total_pages': total_pages, 'total_price_sum': total_price_sum, 'latest_order_date': latest_order_date},
+            ensure_ascii=False).encode('utf-8'),
+                            content_type='application/json;charset=utf-8')
+        return response, 200
+    else:
+        # Serialize the documents using json_util from pymongo and specify encoding
+        response = Response(json_util.dumps(
+            {'orders': documents, 'total_orders': total_orders, 'start_range': start_range, 'end_range': end_range,
+             'total_pages': total_pages},
+            ensure_ascii=False).encode('utf-8'),
+                            content_type='application/json;charset=utf-8')
+        return response, 200
 
 
 if __name__ == '__main__':
