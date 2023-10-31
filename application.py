@@ -181,16 +181,16 @@ def add_client():
 
     access_token = data.get('access_token')
     if not access_token:
-        response = jsonify({'message': 'Access token is missing'}), 401
+        response = jsonify({'token': False}), 401
         return response
     try:
         # Verify the JWT token
         decoded_token = jwt.decode(access_token, SECRET_KEY, algorithms=['HS256'])
     except jwt.ExpiredSignatureError:
-        response = jsonify({'message': 'Expired token'}), 401
+        response = jsonify({'token': False}), 401
         return response
     except jwt.InvalidTokenError:
-        response = jsonify({'message': 'Invalid token'}), 401
+        response = jsonify({'token': False}), 401
         return response
     name = data.get('name', None)
     phone = data.get('phone', None)
@@ -239,16 +239,16 @@ def clients():
     data = request.get_json()
     access_token = data.get('access_token')
     if not access_token:
-        response = jsonify({'message': 'Access token is missing'}), 401
+        response = jsonify({'token': False}), 401
         return response
     try:
         # Verify the JWT token
         decoded_token = jwt.decode(access_token, SECRET_KEY, algorithms=['HS256'])
     except jwt.ExpiredSignatureError:
-        response = jsonify({'message': 'Expired token'}), 401
+        response = jsonify({'token': False}), 401
         return response
     except jwt.InvalidTokenError:
-        response = jsonify({'message': 'Invalid token'}), 401
+        response = jsonify({'token': False}), 401
         return response
     keyword = data.get('keyword')
     page = data.get('page', 1)  # Default to page 1 if not provided
@@ -285,16 +285,16 @@ def delete_client():
     client_id = data.get('client_id')
     access_token = data.get('access_token')
     if not access_token:
-        response = jsonify({'message': 'Access token is missing'}), 401
+        response = jsonify({'token': False}), 401
         return response
     try:
         # Verify the JWT token
         decoded_token = jwt.decode(access_token, SECRET_KEY, algorithms=['HS256'])
     except jwt.ExpiredSignatureError:
-        response = jsonify({'message': 'Expired token'}), 401
+        response = jsonify({'token': False}), 401
         return response
     except jwt.InvalidTokenError:
-        response = jsonify({'message': 'Invalid token'}), 401
+        response = jsonify({'token': False}), 401
         return response
 
     # Convert the client_id to ObjectId type
@@ -315,16 +315,16 @@ def update_client(client_id):
     data = request.form.to_dict()
     access_token = data.get('access_token')
     if not access_token:
-        response = jsonify({'message': 'Access token is missing'}), 401
+        response = jsonify({'token': False}), 401
         return response
     try:
         # Verify the JWT token
         decoded_token = jwt.decode(access_token, SECRET_KEY, algorithms=['HS256'])
     except jwt.ExpiredSignatureError:
-        response = jsonify({'message': 'Expired token'}), 401
+        response = jsonify({'token': False}), 401
         return response
     except jwt.InvalidTokenError:
-        response = jsonify({'message': 'Invalid token'}), 401
+        response = jsonify({'token': False}), 401
         return response
     # Convert the client_id to ObjectId type
     client_object_id = ObjectId(client_id)
@@ -399,16 +399,16 @@ def new_status():
     data = request.get_json()
     access_token = data.get('access_token')
     if not access_token:
-        response = jsonify({'message': 'Access token is missing'}), 401
+        response = jsonify({'token': False}), 401
         return response
     try:
         # Verify the JWT token
         decoded_token = jwt.decode(access_token, SECRET_KEY, algorithms=['HS256'])
     except jwt.ExpiredSignatureError:
-        response = jsonify({'message': 'Expired token'}), 401
+        response = jsonify({'token': False}), 401
         return response
     except jwt.InvalidTokenError:
-        response = jsonify({'message': 'Invalid token'}), 401
+        response = jsonify({'token': False}), 401
         return response
 
     status = data.get('status')
@@ -426,16 +426,16 @@ def get_statuses():
     data = request.get_json()
     access_token = data.get('access_token')
     if not access_token:
-        response = jsonify({'message': 'Access token is missing'}), 401
+        response = jsonify({'token': False}), 401
         return response
     try:
         # Verify the JWT token
         decoded_token = jwt.decode(access_token, SECRET_KEY, algorithms=['HS256'])
     except jwt.ExpiredSignatureError:
-        response = jsonify({'message': 'Expired token'}), 401
+        response = jsonify({'token': False}), 401
         return response
     except jwt.InvalidTokenError:
-        response = jsonify({'message': 'Invalid token'}), 401
+        response = jsonify({'token': False}), 401
         return response
 
     # Retrieve specific fields from all documents in the collection
