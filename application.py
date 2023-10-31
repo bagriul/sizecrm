@@ -8,6 +8,7 @@ import config
 from datetime import datetime, timedelta
 import base64
 import json
+import math
 
 application = Flask(__name__)
 CORS(application)
@@ -262,6 +263,8 @@ def clients():
     # Count the total number of clients that match the filter criteria
     total_clients = clients_collection.count_documents(filter_criteria)
 
+    total_pages = math.ceil(total_clients / per_page)
+
     # Paginate the query results using skip and limit, and apply filters
     skip = (page - 1) * per_page
     documents = list(clients_collection.find(filter_criteria).skip(skip).limit(per_page))
@@ -272,7 +275,8 @@ def clients():
 
     # Serialize the documents using json_util from pymongo and specify encoding
     response = Response(json_util.dumps(
-        {'clients': documents, 'total_clients': total_clients, 'start_range': start_range, 'end_range': end_range},
+        {'clients': documents, 'total_clients': total_clients, 'start_range': start_range, 'end_range': end_range,
+         'total_pages': total_pages},
         ensure_ascii=False).encode('utf-8'),
                         content_type='application/json;charset=utf-8')
     return response, 200
