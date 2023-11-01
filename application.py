@@ -217,7 +217,7 @@ def add_client():
         'additional_phone': additional_phone,
         'email': email,
         'gender': gender,
-        'birthday': datetime.strptime(birthday, '%d-%m-%Y'),
+        'birthday': datetime.strptime(birthday, "%a %b %d %Y"),
         'instagram': instagram,
         'telegram': telegram,
         'comment': comment,
