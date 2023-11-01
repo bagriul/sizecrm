@@ -447,7 +447,7 @@ def get_statuses():
     documents = list(statuses_collection.find({}, {"status": 1, "colour": 1, "_id": 0}))
 
     # Convert the list of documents to a JSON array
-    json_data = json.dumps(documents)
+    json_data = json.dumps(documents, ensure_ascii=False)
     return json_data, 200
 
 
