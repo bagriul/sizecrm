@@ -274,6 +274,17 @@ def clients():
     start_range = skip + 1
     end_range = min(skip + per_page, total_clients)
 
+    total_price_sum = 0
+    latest_order_date = None
+    for document in documents:
+        total_price_sum += document['total_price']
+        clients_collection.find_one_and_update(document, {'$set': {'total_price_sum': total_price_sum}})
+        if latest_order_date is None or document['order_date'] > latest_order_date:
+            latest_order_date = document['order_date']
+            clients_collection.find_one_and_update(document, {'$set': {'latest_order_date': latest_order_date}})
+
+    documents = list(clients_collection.find(filter_criteria).skip(skip).limit(per_page))
+
     # Serialize the documents using json_util from pymongo and specify encoding
     response = Response(json_util.dumps(
         {'clients': documents, 'total_clients': total_clients, 'start_range': start_range, 'end_range': end_range,
@@ -444,11 +455,13 @@ def get_statuses():
         return response
 
     # Retrieve specific fields from all documents in the collection
-    documents = list(statuses_collection.find({}, {"status": 1, "colour": 1, "_id": 0}))
+    documents = list(statuses_collection.find())
 
-    # Convert the list of documents to a JSON array
-    json_data = json.dumps(documents, ensure_ascii=False)
-    return json_data, 200
+    response = Response(json_util.dumps(
+        {'statuses': documents},
+        ensure_ascii=False).encode('utf-8'),
+                        content_type='application/json;charset=utf-8')
+    return response, 200
 
 
 @application.route('/client_info', methods=['POST'])
@@ -529,32 +542,13 @@ def orders():
     start_range = skip + 1
     end_range = min(skip + per_page, total_orders)
 
-    if email:
-        total_price_sum = 0
-        latest_order_date = None
-
-        for document in documents:
-            if 'total_price' in document:
-                total_price_sum += document['total_price']
-            if 'order_date' in document:
-                if latest_order_date is None or document['order_date'] > latest_order_date:
-                    latest_order_date = document['order_date']
-
-        # Serialize the documents using json_util from pymongo and specify encoding
-        response = Response(json_util.dumps(
-            {'orders': documents, 'total_orders': total_orders, 'start_range': start_range, 'end_range': end_range,
-                'total_pages': total_pages, 'total_price_sum': total_price_sum, 'latest_order_date': latest_order_date},
-            ensure_ascii=False).encode('utf-8'),
-                            content_type='application/json;charset=utf-8')
-        return response, 200
-    else:
-        # Serialize the documents using json_util from pymongo and specify encoding
-        response = Response(json_util.dumps(
-            {'orders': documents, 'total_orders': total_orders, 'start_range': start_range, 'end_range': end_range,
-             'total_pages': total_pages},
-            ensure_ascii=False).encode('utf-8'),
-                            content_type='application/json;charset=utf-8')
-        return response, 200
+    # Serialize the documents using json_util from pymongo and specify encoding
+    response = Response(json_util.dumps(
+        {'orders': documents, 'total_orders': total_orders, 'start_range': start_range, 'end_range': end_range,
+         'total_pages': total_pages},
+        ensure_ascii=False).encode('utf-8'),
+                        content_type='application/json;charset=utf-8')
+    return response, 200
 
 
 if __name__ == '__main__':
