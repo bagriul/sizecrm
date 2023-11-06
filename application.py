@@ -277,10 +277,16 @@ def clients():
     total_price_sum = 0
     latest_order_date = None
     for document in documents:
-        total_price_sum += document['total_price']
+        try:
+            total_price_sum += document['total_price']
+        except:
+            pass
         clients_collection.find_one_and_update(document, {'$set': {'total_price_sum': total_price_sum}})
         if latest_order_date is None or document['order_date'] > latest_order_date:
-            latest_order_date = document['order_date']
+            try:
+                latest_order_date = document['order_date']
+            except:
+                pass
             clients_collection.find_one_and_update(document, {'$set': {'latest_order_date': latest_order_date}})
 
     documents = list(clients_collection.find(filter_criteria).skip(skip).limit(per_page))
