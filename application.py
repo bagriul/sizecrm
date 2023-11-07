@@ -20,6 +20,7 @@ users_collection = db['users']
 clients_collection = db['clients']
 statuses_collection = db['statuses']
 orders_collection = db['orders']
+tasks_collection = db['tasks']
 
 
 @application.route('/', methods=['GET'])
@@ -96,6 +97,22 @@ def verify_refresh_token(refresh_token):
         return False
     except jwt.InvalidTokenError:
         # Invalid token
+        return False
+
+
+def check_token(access_token):
+    if not access_token:
+        response = jsonify({'token': False}), 401
+        return False
+    try:
+        # Verify the JWT token
+        decoded_token = jwt.decode(access_token, SECRET_KEY, algorithms=['HS256'])
+        return True
+    except jwt.ExpiredSignatureError:
+        response = jsonify({'token': False}), 401
+        return False
+    except jwt.InvalidTokenError:
+        response = jsonify({'token': False}), 401
         return False
 
 
@@ -182,18 +199,8 @@ def add_client():
     userpic = request.files.get('userpic')
 
     access_token = data.get('access_token')
-    if not access_token:
-        response = jsonify({'token': False}), 401
-        return response
-    try:
-        # Verify the JWT token
-        decoded_token = jwt.decode(access_token, SECRET_KEY, algorithms=['HS256'])
-    except jwt.ExpiredSignatureError:
-        response = jsonify({'token': False}), 401
-        return response
-    except jwt.InvalidTokenError:
-        response = jsonify({'token': False}), 401
-        return response
+    if check_token(access_token) is False:
+        return jsonify({'token': False}), 401
     name = data.get('name', None)
     phone = data.get('phone', None)
     additional_phone = data.get('additional_phone', None)
@@ -240,18 +247,8 @@ def add_client():
 def clients():
     data = request.get_json()
     access_token = data.get('access_token')
-    if not access_token:
-        response = jsonify({'token': False}), 401
-        return response
-    try:
-        # Verify the JWT token
-        decoded_token = jwt.decode(access_token, SECRET_KEY, algorithms=['HS256'])
-    except jwt.ExpiredSignatureError:
-        response = jsonify({'token': False}), 401
-        return response
-    except jwt.InvalidTokenError:
-        response = jsonify({'token': False}), 401
-        return response
+    if check_token(access_token) is False:
+        return jsonify({'token': False}), 401
     keyword = data.get('keyword')
     page = data.get('page', 1)  # Default to page 1 if not provided
     per_page = data.get('per_page', 10)  # Default to 10 items per page if not provided
@@ -306,18 +303,8 @@ def delete_client():
     data = request.get_json()
     client_id = data.get('client_id')
     access_token = data.get('access_token')
-    if not access_token:
-        response = jsonify({'token': False}), 401
-        return response
-    try:
-        # Verify the JWT token
-        decoded_token = jwt.decode(access_token, SECRET_KEY, algorithms=['HS256'])
-    except jwt.ExpiredSignatureError:
-        response = jsonify({'token': False}), 401
-        return response
-    except jwt.InvalidTokenError:
-        response = jsonify({'token': False}), 401
-        return response
+    if check_token(access_token) is False:
+        return jsonify({'token': False}), 401
 
     # Convert the client_id to ObjectId type
     client_object_id = ObjectId(client_id)
@@ -336,18 +323,8 @@ def delete_client():
 def update_client(client_id):
     data = request.form.to_dict()
     access_token = data.get('access_token')
-    if not access_token:
-        response = jsonify({'token': False}), 401
-        return response
-    try:
-        # Verify the JWT token
-        decoded_token = jwt.decode(access_token, SECRET_KEY, algorithms=['HS256'])
-    except jwt.ExpiredSignatureError:
-        response = jsonify({'token': False}), 401
-        return response
-    except jwt.InvalidTokenError:
-        response = jsonify({'token': False}), 401
-        return response
+    if check_token(access_token) is False:
+        return jsonify({'token': False}), 401
     # Convert the client_id to ObjectId type
     client_object_id = ObjectId(client_id)
 
@@ -420,18 +397,8 @@ def update_client(client_id):
 def new_status():
     data = request.get_json()
     access_token = data.get('access_token')
-    if not access_token:
-        response = jsonify({'token': False}), 401
-        return response
-    try:
-        # Verify the JWT token
-        decoded_token = jwt.decode(access_token, SECRET_KEY, algorithms=['HS256'])
-    except jwt.ExpiredSignatureError:
-        response = jsonify({'token': False}), 401
-        return response
-    except jwt.InvalidTokenError:
-        response = jsonify({'token': False}), 401
-        return response
+    if check_token(access_token) is False:
+        return jsonify({'token': False}), 401
 
     status = data.get('status')
     colour = data.get('colour')
@@ -447,18 +414,8 @@ def new_status():
 def get_statuses():
     data = request.get_json()
     access_token = data.get('access_token')
-    if not access_token:
-        response = jsonify({'token': False}), 401
-        return response
-    try:
-        # Verify the JWT token
-        decoded_token = jwt.decode(access_token, SECRET_KEY, algorithms=['HS256'])
-    except jwt.ExpiredSignatureError:
-        response = jsonify({'token': False}), 401
-        return response
-    except jwt.InvalidTokenError:
-        response = jsonify({'token': False}), 401
-        return response
+    if check_token(access_token) is False:
+        return jsonify({'token': False}), 401
 
     # Retrieve specific fields from all documents in the collection
     documents = list(statuses_collection.find())
@@ -474,48 +431,48 @@ def get_statuses():
 def client_info():
     data = request.get_json()
     access_token = data.get('access_token')
-    if not access_token:
-        response = jsonify({'token': False}), 401
-        return response
-    try:
-        # Verify the JWT token
-        decoded_token = jwt.decode(access_token, SECRET_KEY, algorithms=['HS256'])
-    except jwt.ExpiredSignatureError:
-        response = jsonify({'token': False}), 401
-        return response
-    except jwt.InvalidTokenError:
-        response = jsonify({'token': False}), 401
-        return response
+    if check_token(access_token) is False:
+        return jsonify({'token': False}), 401
 
     client_id = data.get('client_id')
     object_id = ObjectId(client_id)
-    document = clients_collection.find_one({'_id': object_id})
-    if document:
+    client_document = clients_collection.find_one({'_id': object_id})
+
+    if client_document:
         # Convert ObjectId to string before returning the response
-        document['_id'] = str(document['_id'])
-        return document, 200
-    elif document is None:
+        client_document['_id'] = str(client_document['_id'])
+
+        # Find orders where email matches client email
+        client_email = client_document.get('email')
+        orders = list(orders_collection.find({'email': client_email}))
+
+        # Convert ObjectId to string for each order document
+        for order in orders:
+            order['_id'] = str(order['_id'])
+
+        # Get sorting parameters from the request
+        sort_by = data.get('sort_by')
+        if sort_by:
+            reverse_sort = data.get('reverse_sort', False)
+            orders = sorted(orders, key=lambda x: x.get(sort_by, 0), reverse=reverse_sort)
+
+        # Add sorted orders to the client document
+        client_document['orders'] = orders
+
+        # Use dumps() to handle ObjectId serialization
+        return json.dumps(client_document, default=str), 200, {'Content-Type': 'application/json'}
+    else:
         response = jsonify({'message': 'Client not found'}), 404
         return response
 
 
-# Endpoint to get clients list
+# Endpoint to get orders list
 @application.route('/orders', methods=['POST'])
 def orders():
     data = request.get_json()
     access_token = data.get('access_token')
-    if not access_token:
-        response = jsonify({'token': False}), 401
-        return response
-    try:
-        # Verify the JWT token
-        decoded_token = jwt.decode(access_token, SECRET_KEY, algorithms=['HS256'])
-    except jwt.ExpiredSignatureError:
-        response = jsonify({'token': False}), 401
-        return response
-    except jwt.InvalidTokenError:
-        response = jsonify({'token': False}), 401
-        return response
+    if check_token(access_token) is False:
+        return jsonify({'token': False}), 401
     email = data.get('email')
     page = data.get('page', 1)  # Default to page 1 if not provided
     per_page = data.get('per_page', 10)  # Default to 10 items per page if not provided
@@ -551,6 +508,106 @@ def orders():
     # Serialize the documents using json_util from pymongo and specify encoding
     response = Response(json_util.dumps(
         {'orders': documents, 'total_orders': total_orders, 'start_range': start_range, 'end_range': end_range,
+         'total_pages': total_pages},
+        ensure_ascii=False).encode('utf-8'),
+                        content_type='application/json;charset=utf-8')
+    return response, 200
+
+
+@application.route('/add_task', methods=['POST'])
+def add_task():
+    data = request.get_json()
+    access_token = data.get('access_token')
+    if check_token(access_token) is False:
+        return jsonify({'token': False}), 401
+    headline = data.get('headline')
+    description = data.get('description', None)
+    participants = data.get('participants', None)
+    responsible = data.get('responsible', None)
+    deadline = data.get('deadline', None)
+    status = data.get('status', None)
+    comment = data.get('comment', None)
+
+    document = {'headline': headline,
+                'description': description,
+                'participants': participants,
+                'responsible': responsible,
+                'deadline': datetime.strptime(deadline, "%a %b %d %Y"),
+                'status': status,
+                'comment': comment}
+    tasks_collection.insert_one(document)
+    return jsonify({'message': True}), 200
+
+
+@application.route('/update_task', methods=['POST'])
+def update_task():
+    data = request.get_json()
+    access_token = data.get('access_token')
+    if check_token(access_token) is False:
+        return jsonify({'token': False}), 401
+
+    task_id = data.get('task_id')
+    task = tasks_collection.find_one({'_id': ObjectId(task_id)})
+    if task is None:
+        return jsonify({'message': False}), 404
+
+    # Update task fields based on the provided data
+    task['headline'] = data.get('headline', task['headline'])
+    task['description'] = data.get('description', task['description'])
+    task['participants'] = data.get('participants', task['participants'])
+    task['responsible'] = data.get('responsible', task['responsible'])
+    task['deadline'] = datetime.strptime(data.get('deadline', task['deadline']), "%a %b %d %Y")
+    task['status'] = data.get('status', task['status'])
+    task['comment'] = data.get('comment', task['comment'])
+
+    # Update the task in the database
+    tasks_collection.update_one({'_id': ObjectId(task_id)}, {'$set': task})
+    return jsonify({'message': True}), 200
+
+
+@application.route('/delete_task', methods=['POST'])
+def delete_task():
+    data = request.get_json()
+    access_token = data.get('access_token')
+    if check_token(access_token) is False:
+        return jsonify({'token': False}), 401
+
+    task_id = data.get('task_id')
+    tasks_collection.find_one_and_delete({'_id': ObjectId(task_id)})
+    return jsonify({'message': True}), 200
+
+
+@application.route('/tasks', methods=['POST'])
+def tasks():
+    data = request.get_json()
+    access_token = data.get('access_token')
+    if check_token(access_token) is False:
+        return jsonify({'token': False}), 401
+    keyword = data.get('keyword')
+    page = data.get('page', 1)  # Default to page 1 if not provided
+    per_page = data.get('per_page', 10)  # Default to 10 items per page if not provided
+
+    filter_criteria = {}
+    if keyword:
+        tasks_collection.create_index([("$**", "text")])
+        filter_criteria['$text'] = {'$search': keyword}
+
+    # Count the total number of clients that match the filter criteria
+    total_tasks = tasks_collection.count_documents(filter_criteria)
+
+    total_pages = math.ceil(total_tasks / per_page)
+
+    # Paginate the query results using skip and limit, and apply filters
+    skip = (page - 1) * per_page
+    documents = list(tasks_collection.find(filter_criteria).skip(skip).limit(per_page))
+
+    # Calculate the range of clients being displayed
+    start_range = skip + 1
+    end_range = min(skip + per_page, total_tasks)
+
+    # Serialize the documents using json_util from pymongo and specify encoding
+    response = Response(json_util.dumps(
+        {'tasks': documents, 'total_tasks': total_tasks, 'start_range': start_range, 'end_range': end_range,
          'total_pages': total_pages},
         ensure_ascii=False).encode('utf-8'),
                         content_type='application/json;charset=utf-8')
