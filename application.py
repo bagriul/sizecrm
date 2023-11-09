@@ -497,6 +497,8 @@ def orders():
     # Paginate the query results using skip and limit, and apply filters
     skip = (page - 1) * per_page
     documents = list(orders_collection.find(filter_criteria).skip(skip).limit(per_page))
+    for document in documents:
+        document['_id'] = str(document['_id'])
     sort_by = data.get('sort_by')
     if sort_by:
         reverse_sort = data.get('reverse_sort', False)
