@@ -211,6 +211,9 @@ def add_client():
     telegram = data.get('telegram', None)
     comment = data.get('comment', None)
     status = data.get('status', None)
+    status_doc = statuses_collection.find_one({'status': status})
+    if status_doc:
+        del status_doc['_id']
 
     # Process image file
     if userpic:
@@ -228,7 +231,7 @@ def add_client():
         'instagram': instagram,
         'telegram': telegram,
         'comment': comment,
-        'status': status,
+        'status': status_doc,
         'userpic': userpic  # Store the image data as base64 string
     }
 
@@ -265,32 +268,36 @@ def clients():
 
     # Paginate the query results using skip and limit, and apply filters
     skip = (page - 1) * per_page
-    documents = list(clients_collection.find(filter_criteria).skip(skip).limit(per_page))
+    clients = list(clients_collection.find(filter_criteria).skip(skip).limit(per_page))
+
+    response_clients = []
+    for client in clients:
+        client_orders = list(orders_collection.find({'email': client['email']}))
+        client['orders'] = client_orders
+        total_price_sum = 0
+        latest_order_date = None
+        for order in client_orders:
+            try:
+                total_price_sum += order['total_price']
+            except:
+                pass
+            if latest_order_date is None or order['order_date'] > latest_order_date:
+                try:
+                    latest_order_date = order['order_date']
+                except:
+                    pass
+        client['total_price_sum'] = total_price_sum
+        client['latest_order_date'] = latest_order_date
+        client['_id'] = str(client['_id'])
+        response_clients.append(client)
 
     # Calculate the range of clients being displayed
     start_range = skip + 1
     end_range = min(skip + per_page, total_clients)
 
-    total_price_sum = 0
-    latest_order_date = None
-    for document in documents:
-        try:
-            total_price_sum += document['total_price']
-        except:
-            pass
-        clients_collection.find_one_and_update(document, {'$set': {'total_price_sum': total_price_sum}})
-        if latest_order_date is None or document['order_date'] > latest_order_date:
-            try:
-                latest_order_date = document['order_date']
-            except:
-                pass
-            clients_collection.find_one_and_update(document, {'$set': {'latest_order_date': latest_order_date}})
-
-    documents = list(clients_collection.find(filter_criteria).skip(skip).limit(per_page))
-
-    # Serialize the documents using json_util from pymongo and specify encoding
+    # Serialize the response clients using json_util from pymongo and specify encoding
     response = Response(json_util.dumps(
-        {'clients': documents, 'total_clients': total_clients, 'start_range': start_range, 'end_range': end_range,
+        {'clients': response_clients, 'total_clients': total_clients, 'start_range': start_range, 'end_range': end_range,
          'total_pages': total_pages},
         ensure_ascii=False).encode('utf-8'),
                         content_type='application/json;charset=utf-8')
@@ -473,16 +480,14 @@ def orders():
     access_token = data.get('access_token')
     if check_token(access_token) is False:
         return jsonify({'token': False}), 401
-    email = data.get('email')
+    keyword = data.get('keyword')
     page = data.get('page', 1)  # Default to page 1 if not provided
     per_page = data.get('per_page', 10)  # Default to 10 items per page if not provided
-    sort_date = data.get('sort_date')
-    sort_price = data.get('sort_price')
 
     filter_criteria = {}
-    if email:
+    if keyword:
         orders_collection.create_index([("$**", "text")])
-        filter_criteria['$text'] = {'$search': email}
+        filter_criteria['$text'] = {'$search': keyword}
 
     # Count the total number of clients that match the filter criteria
     total_orders = orders_collection.count_documents(filter_criteria)
@@ -492,14 +497,10 @@ def orders():
     # Paginate the query results using skip and limit, and apply filters
     skip = (page - 1) * per_page
     documents = list(orders_collection.find(filter_criteria).skip(skip).limit(per_page))
-    if sort_date and sort_date == 'ASCENDING':
-        documents = list(orders_collection.find(filter_criteria).skip(skip).limit(per_page).sort("order_date", ASCENDING))
-    if sort_date and sort_date == 'DESCENDING':
-        documents = list(orders_collection.find(filter_criteria).skip(skip).limit(per_page).sort("order_date", DESCENDING))
-    if sort_price and sort_price == 'ASCENDING':
-        documents = list(orders_collection.find(filter_criteria).skip(skip).limit(per_page).sort("total_price", ASCENDING))
-    if sort_price and sort_price == 'DESCENDING':
-        documents = list(orders_collection.find(filter_criteria).skip(skip).limit(per_page).sort("total_price", DESCENDING))
+    sort_by = data.get('sort_by')
+    if sort_by:
+        reverse_sort = data.get('reverse_sort', False)
+        documents = sorted(documents, key=lambda x: x.get(sort_by, 0), reverse=reverse_sort)
 
     # Calculate the range of clients being displayed
     start_range = skip + 1
@@ -512,6 +513,163 @@ def orders():
         ensure_ascii=False).encode('utf-8'),
                         content_type='application/json;charset=utf-8')
     return response, 200
+
+
+@application.route('/add_order', methods=['POST'])
+def add_order():
+    data = request.get_json()
+    access_token = data.get('access_token')
+    if check_token(access_token) is False:
+        return jsonify({'token': False}), 401
+    date = data.get('date')
+    client = data.get('client')
+    email = data.get('email')
+    shipping = data.get('shipping')
+    status = data.get('status')
+    status_doc = statuses_collection.find_one({'status': status})
+    if status_doc:
+        del status_doc['_id']
+    source = data.get('source')
+    payment = data.get('payment')
+    comment = data.get('comment')
+    products = data.get('products')
+
+    total_sum = 0
+    for product in products:
+        total_sum += product['price'] * product['amount']
+
+    document = {'date': datetime.strptime(date, "%a %b %d %Y"),
+                'client': client,
+                'email': email,
+                'shipping': shipping,
+                'status': status_doc,
+                'source': source,
+                'payment': payment,
+                'comment': comment,
+                'products': products,
+                'total_sum': total_sum}
+
+    is_present = orders_collection.find_one(document)
+    if is_present is None:
+        orders_collection.insert_one(document)
+
+    return jsonify({'message': True}), 200
+
+
+@application.route('/delete_order', methods=['POST'])
+def delete_order():
+    data = request.get_json()
+    access_token = data.get('access_token')
+    if check_token(access_token) is False:
+        return jsonify({'token': False}), 401
+
+    order_id = data.get('order_id')
+    orders_collection.find_one_and_delete({'_id': ObjectId(order_id)})
+    return jsonify({'message': True}), 200
+
+
+@application.route('/update_order', methods=['POST'])
+def update_order():
+    data = request.get_json()
+    access_token = data.get('access_token')
+    if check_token(access_token) is False:
+        return jsonify({'token': False}), 401
+
+    order_id = data.get('order_id')
+    order = orders_collection.find_one({'_id': ObjectId(order_id)})
+    if order is None:
+        return jsonify({'message': False}), 404
+
+    # Update task fields based on the provided data
+    order['client'] = data.get('client', order['client'])
+    order['email'] = data.get('email', order['email'])
+    order['date'] = datetime.strptime(data.get('date', order['date']), "%a %b %d %Y")
+    order['shipping'] = data.get('shipping', order['shipping'])
+    status = data.get('status')
+    if status:
+        status_doc = statuses_collection.find_one({'status': status})
+        if status_doc:
+            del status_doc['_id']
+        order['status'] = status_doc
+    order['source'] = data.get('source', order['source'])
+    order['payment'] = data.get('payment', order['payment'])
+    order['comment'] = data.get('comment', order['comment'])
+
+    orders_collection.update_one({'_id': ObjectId(order_id)}, {'$set': order})
+    return jsonify({'message': True}), 200
+
+
+@application.route('/add_product_order', methods=['POST'])
+def add_product_order():
+    data = request.get_json()
+    access_token = data.get('access_token')
+    if check_token(access_token) is False:
+        return jsonify({'token': False}), 401
+
+    order_id = data.get('order_id')
+    order = orders_collection.find_one({'_id': ObjectId(order_id)})
+    if order is None:
+        return jsonify({'message': False}), 404
+    picture = data.get('picture')
+    name = data.get('name')
+    size = data.get('size')
+    amount = data.get('amount')
+    price = data.get('price')
+    document = {'picture': picture,
+                'name': name,
+                'size': size,
+                'amount': amount,
+                'price': price}
+    orders_collection.update_one(order, {'$push': {'products': document}})
+    order = orders_collection.find_one({'_id': ObjectId(order_id)})
+    total_sum = 0
+    for product in order['products']:
+        total_sum += product['price'] * product['amount']
+    orders_collection.find_one_and_update(order, {'$set': {'total_sum': total_sum}})
+    return jsonify({'message': True}), 200
+
+
+@application.route('/delete_product_order', methods=['POST'])
+def delete_product_order():
+    data = request.get_json()
+    access_token = data.get('access_token')
+    if check_token(access_token) is False:
+        return jsonify({'token': False}), 401
+
+    order_id = data.get('order_id')
+    order = orders_collection.find_one({'_id': ObjectId(order_id)})
+    if order is None:
+        return jsonify({'message': False}), 404
+    name = data.get('name')
+    orders_collection.update_one(order, {'$pull': {'products': {'name': name}}})
+    order = orders_collection.find_one({'_id': ObjectId(order_id)})
+    total_sum = 0
+    for product in order['products']:
+        total_sum += product['price'] * product['amount']
+    orders_collection.find_one_and_update(order, {'$set': {'total_sum': total_sum}})
+    return jsonify({'message': True}), 200
+
+
+@application.route('/order_info', methods=['POST'])
+def order_info():
+    data = request.get_json()
+    access_token = data.get('access_token')
+    if check_token(access_token) is False:
+        return jsonify({'token': False}), 401
+
+    order_id = data.get('order_id')
+    object_id = ObjectId(order_id)
+    order_document = orders_collection.find_one({'_id': object_id})
+
+    if order_document:
+        # Convert ObjectId to string before returning the response
+        order_document['_id'] = str(order_document['_id'])
+
+        # Use dumps() to handle ObjectId serialization
+        return json.dumps(order_document, default=str), 200, {'Content-Type': 'application/json'}
+    else:
+        response = jsonify({'message': 'Order not found'}), 404
+        return response
 
 
 @application.route('/add_task', methods=['POST'])
@@ -575,6 +733,28 @@ def delete_task():
     task_id = data.get('task_id')
     tasks_collection.find_one_and_delete({'_id': ObjectId(task_id)})
     return jsonify({'message': True}), 200
+
+
+@application.route('/task_info', methods=['POST'])
+def task_info():
+    data = request.get_json()
+    access_token = data.get('access_token')
+    if check_token(access_token) is False:
+        return jsonify({'token': False}), 401
+
+    task_id = data.get('task_id')
+    object_id = ObjectId(task_id)
+    task_document = tasks_collection.find_one({'_id': object_id})
+
+    if task_document:
+        # Convert ObjectId to string before returning the response
+        task_document['_id'] = str(task_document['_id'])
+
+        # Use dumps() to handle ObjectId serialization
+        return json.dumps(task_document, default=str), 200, {'Content-Type': 'application/json'}
+    else:
+        response = jsonify({'message': 'Task not found'}), 404
+        return response
 
 
 @application.route('/tasks', methods=['POST'])
