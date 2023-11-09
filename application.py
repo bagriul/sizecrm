@@ -835,6 +835,8 @@ def tasks():
     # Paginate the query results using skip and limit, and apply filters
     skip = (page - 1) * per_page
     documents = list(tasks_collection.find(filter_criteria).skip(skip).limit(per_page))
+    for document in documents:
+        document['_id'] = str(document['_id'])
 
     # Calculate the range of clients being displayed
     start_range = skip + 1
