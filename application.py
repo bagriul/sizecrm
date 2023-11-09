@@ -680,20 +680,28 @@ def add_task():
     access_token = data.get('access_token')
     if check_token(access_token) is False:
         return jsonify({'token': False}), 401
+    date = data.get('date')
+    creator = data.get('creator')
     headline = data.get('headline')
     description = data.get('description', None)
     participants = data.get('participants', None)
     responsible = data.get('responsible', None)
     deadline = data.get('deadline', None)
     status = data.get('status', None)
+    if status:
+        status_doc = statuses_collection.find_one({'status': status})
+        if status_doc:
+            del status_doc['_id']
     comment = data.get('comment', None)
 
-    document = {'headline': headline,
+    document = {'date': datetime.strptime(date, "%a %b %d %Y"),
+                'creator': creator,
+                'headline': headline,
                 'description': description,
                 'participants': participants,
                 'responsible': responsible,
                 'deadline': datetime.strptime(deadline, "%a %b %d %Y"),
-                'status': status,
+                'status': status_doc,
                 'comment': comment}
     tasks_collection.insert_one(document)
     return jsonify({'message': True}), 200
@@ -713,11 +721,19 @@ def update_task():
 
     # Update task fields based on the provided data
     task['headline'] = data.get('headline', task['headline'])
+    task['creator'] = data.get('creator', task['creator'])
     task['description'] = data.get('description', task['description'])
     task['participants'] = data.get('participants', task['participants'])
     task['responsible'] = data.get('responsible', task['responsible'])
-    task['deadline'] = datetime.strptime(data.get('deadline', task['deadline']), "%a %b %d %Y")
-    task['status'] = data.get('status', task['status'])
+    deadline = data.get('deadline')
+    if deadline:
+        task['deadline'] = datetime.strptime(data.get('deadline', task['deadline']), "%a %b %d %Y")
+    status = data.get('status')
+    if status:
+        status_doc = statuses_collection.find_one({'status': status})
+        if status_doc:
+            del status_doc['_id']
+        task['status'] = status_doc
     task['comment'] = data.get('comment', task['comment'])
 
     # Update the task in the database
