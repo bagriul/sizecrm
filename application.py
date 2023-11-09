@@ -363,7 +363,10 @@ def update_client(client_id):
         if 'comment' in data:
             existing_client['comment'] = data['comment']
         if 'status' in data:
-            existing_client['status'] = data['status']
+            status_doc = statuses_collection.find_one({'status': data['status']})
+            if status_doc:
+                del status_doc['_id']
+            existing_client['status'] = status_doc
 
         # Update userpic if a new userpic is provided in the request
         def process_and_store_userpic(userpic):
