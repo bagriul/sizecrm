@@ -462,7 +462,18 @@ def client_info():
 
         # Find orders where email matches client email
         client_email = client_document.get('email')
-        orders = list(orders_collection.find({'email': client_email}))
+        orders_query = {'email': client_email}
+
+        # Get total number of orders
+        total_orders = orders_collection.count_documents(orders_query)
+
+        # Pagination parameters
+        page = int(data.get('page', 1))
+        page_size = int(data.get('per_page', 10))
+        skip = (page - 1) * page_size
+
+        # Retrieve a subset of orders based on pagination
+        orders = list(orders_collection.find(orders_query).skip(skip).limit(page_size))
 
         # Convert ObjectId to string for each order document
         for order in orders:
@@ -477,11 +488,26 @@ def client_info():
         # Add sorted orders to the client document
         client_document['orders'] = orders
 
+        # Calculate pagination details
+        start_range = skip + 1
+        end_range = min(skip + page_size, total_orders)
+        total_pages = (total_orders + page_size - 1) // page_size
+
+        # Include pagination details in the response
+        response_data = {
+            'client_info': client_document,
+            'total_orders': total_orders,
+            'start_range': start_range,
+            'end_range': end_range,
+            'total_pages': total_pages
+        }
+
         # Use dumps() to handle ObjectId serialization
-        return json.dumps(client_document, default=str), 200, {'Content-Type': 'application/json'}
+        return json.dumps(response_data, default=str), 200, {'Content-Type': 'application/json'}
     else:
         response = jsonify({'message': 'Client not found'}), 404
         return response
+
 
 
 # Endpoint to get orders list
