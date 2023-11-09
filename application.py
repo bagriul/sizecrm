@@ -409,9 +409,10 @@ def new_status():
 
     status = data.get('status')
     colour = data.get('colour')
-    is_present = statuses_collection.find_one({'status': status})
+    type = data.get('type')
+    is_present = statuses_collection.find_one({'status': status, 'type': type})
     if is_present is None:
-        statuses_collection.insert_one({'status': status, 'colour': colour})
+        statuses_collection.insert_one({'status': status, 'colour': colour, 'type': type})
         return jsonify({'message': 'Created successfully'}), 200
     else:
         return jsonify({'message': 'Status already exists'}), 409
@@ -423,9 +424,16 @@ def get_statuses():
     access_token = data.get('access_token')
     if check_token(access_token) is False:
         return jsonify({'token': False}), 401
+    type = data.get('type')
+    filter_criteria = {}
+    if type:
+        statuses_collection.create_index([("$**", "text")])
+        filter_criteria['$text'] = {'$search': type}
 
     # Retrieve specific fields from all documents in the collection
-    documents = list(statuses_collection.find())
+    documents = list(statuses_collection.find(filter_criteria))
+    for document in documents:
+        document['_id'] = str(document['_id'])
 
     response = Response(json_util.dumps(
         {'statuses': documents},
@@ -810,6 +818,38 @@ def tasks():
         ensure_ascii=False).encode('utf-8'),
                         content_type='application/json;charset=utf-8')
     return response, 200
+
+
+@application.route('/add_task_participant', methods=['POST'])
+def add_task_participant():
+    data = request.get_json()
+    access_token = data.get('access_token')
+    if check_token(access_token) is False:
+        return jsonify({'token': False}), 401
+
+    task_id = data.get('task_id')
+    task = tasks_collection.find_one({'_id': ObjectId(task_id)})
+    if task is None:
+        return jsonify({'message': False}), 404
+    participant = data.get('participant')
+    tasks_collection.update_one(task, {'$push': {'participants': participant}})
+    return jsonify({'message': True}), 200
+
+
+@application.route('/delete_task_participant', methods=['POST'])
+def delete_task_participant():
+    data = request.get_json()
+    access_token = data.get('access_token')
+    if check_token(access_token) is False:
+        return jsonify({'token': False}), 401
+
+    task_id = data.get('task_id')
+    task = tasks_collection.find_one({'_id': ObjectId(task_id)})
+    if task is None:
+        return jsonify({'message': False}), 404
+    participant = data.get('participant')
+    tasks_collection.update_one(task, {'$pull': {'participants': participant}})
+    return jsonify({'message': True}), 200
 
 
 if __name__ == '__main__':
