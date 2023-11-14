@@ -768,7 +768,7 @@ def update_task():
     task['responsible'] = data.get('responsible', task['responsible'])
     deadline = data.get('deadline')
     if deadline:
-        task['deadline'] = deadline.strftime("%a %b %d %Y")
+        task['deadline'] = deadline
     status = data.get('status')
     if status:
         status_doc = statuses_collection.find_one({'status': status})
