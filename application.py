@@ -717,7 +717,6 @@ def add_task():
     access_token = data.get('access_token')
     if check_token(access_token) is False:
         return jsonify({'token': False}), 401
-    date = data.get('date')
     creator = data.get('creator')
     headline = data.get('headline')
     description = data.get('description', None)
@@ -731,13 +730,18 @@ def add_task():
             del status_doc['_id']
     comment = data.get('comment', None)
 
-    document = {'date': datetime.strptime(date, "%a %b %d %Y"),
+    # Get today's date
+    today = datetime.today()
+    # Format the date
+    formatted_date = today.strftime("%a %b %d %Y")
+
+    document = {'date': formatted_date,
                 'creator': creator,
                 'headline': headline,
                 'description': description,
                 'participants': participants,
                 'responsible': responsible,
-                'deadline': datetime.strptime(deadline, "%a %b %d %Y"),
+                'deadline': deadline,
                 'status': status_doc,
                 'comment': comment}
     tasks_collection.insert_one(document)
