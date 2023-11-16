@@ -21,6 +21,8 @@ clients_collection = db['clients']
 statuses_collection = db['statuses']
 orders_collection = db['orders']
 tasks_collection = db['tasks']
+products_collection = db['products']
+warehouses_collection = db['warehouses']
 
 
 @application.route('/', methods=['GET'])
@@ -509,7 +511,6 @@ def client_info():
         return response
 
 
-
 # Endpoint to get orders list
 @application.route('/orders', methods=['POST'])
 def orders():
@@ -924,6 +925,223 @@ def users():
         ensure_ascii=False).encode('utf-8'),
                         content_type='application/json;charset=utf-8')
     return response, 200
+
+
+@application.route('/add_product', methods=['POST'])
+def add_product():
+    data = request.get_json()
+    access_token = data.get('access_token')
+    if check_token(access_token) is False:
+        return jsonify({'token': False}), 401
+    name = data.get('name')
+    description = data.get('description')
+    status = data.get('status')
+    type = data.get('status_type')
+    if status:
+        status_doc = statuses_collection.find_one({'status': status, 'type': type})
+        if status_doc:
+            del status_doc['_id']
+    category = data.get('category')
+    warehouse = data.get('warehouse')
+    comment = data.get('comment')
+    variations = data.get('variations')
+    subwarehouse = data.get('subwarehouse')
+
+    pieces = sum(variation.get('in_stock', 0) for variation in variations)
+
+    document = {'name': name,
+                'description': description,
+                'status': status_doc,
+                'category': category,
+                'warehouse': warehouse,
+                'subwarehouse': subwarehouse,
+                'comment': comment,
+                'variations': variations,
+                'pieces': pieces,
+                'variations_num': len(variations)}
+
+    products_collection.insert_one(document)
+    return jsonify({'message': True}), 200
+
+
+@application.route('/products', methods=['POST'])
+def products():
+    data = request.get_json()
+    access_token = data.get('access_token')
+    if check_token(access_token) is False:
+        return jsonify({'token': False}), 401
+    keyword = data.get('keyword')
+    warehouse = data.get('warehouse')
+    subwarehouse = data.get('subwarehouse')
+    page = data.get('page', 1)  # Default to page 1 if not provided
+    per_page = data.get('per_page', 10)  # Default to 10 items per page if not provided
+
+    filter_criteria = {}
+    if keyword:
+        tasks_collection.create_index([("$**", "text")])
+        filter_criteria['$text'] = {'$search': keyword}
+    if warehouse:
+        regex_pattern = f'.*{re.escape(warehouse)}.*'
+        filter_criteria['warehouse'] = {'$regex': regex_pattern, '$options': 'i'}
+    if subwarehouse:
+        regex_pattern = f'.*{re.escape(subwarehouse)}.*'
+        filter_criteria['subwarehouse'] = {'$regex': regex_pattern, '$options': 'i'}
+
+    # Count the total number of clients that match the filter criteria
+    total_products = products_collection.count_documents(filter_criteria)
+
+    total_pages = math.ceil(total_products / per_page)
+
+    # Paginate the query results using skip and limit, and apply filters
+    skip = (page - 1) * per_page
+    documents = list(products_collection.find(filter_criteria).skip(skip).limit(per_page))
+    for document in documents:
+        document['_id'] = str(document['_id'])
+
+    # Calculate the range of clients being displayed
+    start_range = skip + 1
+    end_range = min(skip + per_page, total_products)
+
+    # Serialize the documents using json_util from pymongo and specify encoding
+    response = Response(json_util.dumps(
+        {'products': documents, 'total_products': total_products, 'start_range': start_range, 'end_range': end_range,
+         'total_pages': total_pages},
+        ensure_ascii=False).encode('utf-8'),
+                        content_type='application/json;charset=utf-8')
+    return response, 200
+
+
+@application.route('/product_info', methods=['POST'])
+def product_info():
+    data = request.get_json()
+    access_token = data.get('access_token')
+    if check_token(access_token) is False:
+        return jsonify({'token': False}), 401
+
+    product_id = data.get('product_id')
+    object_id = ObjectId(product_id)
+    product_document = products_collection.find_one({'_id': object_id})
+
+    if product_document:
+        # Convert ObjectId to string before returning the response
+        product_document['_id'] = str(product_document['_id'])
+
+        # Include pagination details in the response
+        response_data = {
+            'product_info': product_document
+        }
+
+        # Use dumps() to handle ObjectId serialization
+        return json.dumps(response_data, default=str), 200, {'Content-Type': 'application/json'}
+    else:
+        response = jsonify({'message': 'Product not found'}), 404
+        return response
+
+
+@application.route('/update_product', methods=['POST'])
+def update_product():
+    data = request.get_json()
+    access_token = data.get('access_token')
+    if check_token(access_token) is False:
+        return jsonify({'token': False}), 401
+
+    product_id = data.get('product_id')
+    product = products_collection.find_one({'_id': ObjectId(product_id)})
+    if product is None:
+        return jsonify({'message': False}), 404
+
+    # Update task fields based on the provided data
+    product['name'] = data.get('name', product['name'])
+    product['description'] = data.get('description', product['description'])
+    status = data.get('status')
+    type = data.get('status_type')
+    if status:
+        status_doc = statuses_collection.find_one({'status': status, 'type': type})
+        if status_doc:
+            del status_doc['_id']
+        product['status'] = status_doc
+    product['category'] = data.get('category', product['category'])
+    product['warehouse'] = data.get('warehouse', product['warehouse'])
+    product['subwarehouse'] = data.get('subwarehouse', product['subwarehouse'])
+    product['comment'] = data.get('comment', product['comment'])
+
+    # Update the task in the database
+    products_collection.update_one({'_id': ObjectId(product_id)}, {'$set': product})
+    return jsonify({'message': True}), 200
+
+
+@application.route('/add_variation', methods=['POST'])
+def add_variation():
+    data = request.get_json()
+    access_token = data.get('access_token')
+    if check_token(access_token) is False:
+        return jsonify({'token': False}), 401
+
+    product_id = data.get('product_id')
+    product = products_collection.find_one({'_id': ObjectId(product_id)})
+    if product is None:
+        return jsonify({'message': False}), 404
+    variation = data.get('variation')
+    products_collection.update_one(product, {'$push': {'variations': variation}})
+    product = products_collection.find_one({'_id': ObjectId(product_id)})
+    products_collection.update_one(product, {'$set': {'pieces': sum(variation.get('in_stock', 0) for variation in product['variations'])}})
+    product = products_collection.find_one({'_id': ObjectId(product_id)})
+    products_collection.update_one(product, {'$set': {'variations_num': len(product['variations'])}})
+    return jsonify({'message': True}), 200
+
+
+@application.route('/delete_variation', methods=['POST'])
+def delete_variation():
+    data = request.get_json()
+    product_id = data.get('product_id')
+    index = data.get('index')
+
+    product = products_collection.find_one({'_id': ObjectId(product_id)})
+    # Update the document by pulling the element with the specified sequence number
+    products_collection.update_one(
+        {"_id": ObjectId(product_id)},
+        {"$pull": {"variations": {"$eq": product['variations'][index]}}}
+    )
+
+    # Update pieces and variations_num after removing the variation
+    product = products_collection.find_one({'_id': ObjectId(product_id)})
+    pieces_sum = sum(variation.get('in_stock', 0) for variation in product['variations'])
+    variations_num = len(product['variations'])
+
+    products_collection.update_one(
+        {"_id": ObjectId(product_id)},
+        {"$set": {"pieces": pieces_sum, "variations_num": variations_num}}
+    )
+
+    return jsonify({'message': True}), 200
+
+
+@application.route('/delete_product', methods=['POST'])
+def delete_product():
+    data = request.get_json()
+    access_token = data.get('access_token')
+    if check_token(access_token) is False:
+        return jsonify({'token': False}), 401
+
+    product_id = data.get('product_id')
+    products_collection.find_one_and_delete({'_id': ObjectId(product_id)})
+    return jsonify({'message': True}), 200
+
+
+@application.route('/add_subwarehouse', methods=['POST'])
+def add_subwarehouse():
+    data = request.get_json()
+    access_token = data.get('access_token')
+    if check_token(access_token) is False:
+        return jsonify({'token': False}), 401
+    warehouse = data.get('warehouse')
+    subwarehouse = data.get('subwarehouse')
+
+    document = {'warehouse': warehouse,
+                'subwarehouse': subwarehouse}
+
+    warehouses_collection.insert_one(document)
+    return jsonify({'message': True}), 200
 
 
 if __name__ == '__main__':
