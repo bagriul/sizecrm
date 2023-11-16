@@ -23,6 +23,7 @@ orders_collection = db['orders']
 tasks_collection = db['tasks']
 products_collection = db['products']
 warehouses_collection = db['warehouses']
+variations_collection = db['variations']
 
 
 @application.route('/', methods=['GET'])
@@ -961,6 +962,9 @@ def add_product():
                 'variations_num': len(variations)}
 
     products_collection.insert_one(document)
+    for variation in variations:
+        variation['name'] = name
+        variations_collection.insert_one(variation)
     return jsonify({'message': True}), 200
 
 
@@ -1126,6 +1130,29 @@ def delete_product():
     product_id = data.get('product_id')
     products_collection.find_one_and_delete({'_id': ObjectId(product_id)})
     return jsonify({'message': True}), 200
+
+
+@application.route('/variations', methods=['POST'])
+def variations():
+    data = request.get_json()
+    access_token = data.get('access_token')
+    if check_token(access_token) is False:
+        return jsonify({'token': False}), 401
+    name = data.get('name')
+
+    filter_criteria = {}
+    if name:
+        regex_pattern = f'.*{re.escape(name)}.*'
+        filter_criteria['name'] = {'$regex': regex_pattern, '$options': 'i'}
+
+    documents = list(variations_collection.find(filter_criteria))
+    for document in documents:
+        document['_id'] = str(document['_id'])
+
+    # Serialize the documents using json_util from pymongo and specify encoding
+    response = Response(json_util.dumps({'variations': documents}, ensure_ascii=False).encode('utf-8'),
+            content_type='application/json;charset=utf-8')
+    return response, 200
 
 
 @application.route('/add_subwarehouse', methods=['POST'])
