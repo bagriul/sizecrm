@@ -573,11 +573,24 @@ def add_order():
     source = data.get('source')
     payment = data.get('payment')
     comment = data.get('comment')
-    products = data.get('products')
+    variations_id = data.get('products')
+
+    products = []
+    for variation_id in variations_id:
+        variation = variations_collection.find_one({'_id': ObjectId(variation_id)})
+        document = {'_id': str(variation['_id']),
+                    'size': variation['size'],
+                    'colour': variation['colour'],
+                    'price': variation['price'],
+                    'in_stock': variation['in_stock'],
+                    'amount': 1,
+                    'photos': variation['photos'],
+                    'name': variation['name']}
+        products.append(document)
 
     total_sum = 0
     for product in products:
-        total_sum += product['price'] * product['amount']
+        total_sum += product['price']
 
     document = {'date': datetime.strptime(date, "%a %b %d %Y"),
                 'client': client,
@@ -651,17 +664,33 @@ def add_product_order():
     order = orders_collection.find_one({'_id': ObjectId(order_id)})
     if order is None:
         return jsonify({'message': False}), 404
-    picture = data.get('picture')
-    name = data.get('name')
-    size = data.get('size')
-    amount = data.get('amount')
-    price = data.get('price')
-    document = {'picture': picture,
-                'name': name,
-                'size': size,
-                'amount': amount,
-                'price': price}
-    orders_collection.update_one(order, {'$push': {'products': document}})
+    variation_id = data.get('variation_id')
+    products_id_list = []
+    for product in order['products']:
+        products_id_list.append(str(product['_id']))
+    if variation_id in products_id_list:
+        for product in order['products']:
+            if str(product['_id']) == variation_id:
+                product['amount'] = product['amount'] + 1
+                orders_collection.update_one({'_id': ObjectId(order_id)}, {'$set': {'products': order['products']}})
+    else:
+        variation = variations_collection.find_one({'_id': ObjectId(variation_id)})
+        document = {'_id': variation['_id'],
+                    'size': variation['size'],
+                    'colour': variation['colour'],
+                    'price': variation['price'],
+                    'in_stock': variation['in_stock'],
+                    "amount": 1,
+                    'photos': variation['photos'],
+                    'name': variation['name']}
+
+        orders_collection.update_one(order, {'$push': {'products': document}})
+        order = orders_collection.find_one({'_id': ObjectId(order_id)})
+        total_sum = 0
+        for product in order['products']:
+            total_sum += product['price']
+        orders_collection.find_one_and_update(order, {'$set': {'total_sum': total_sum}})
+
     order = orders_collection.find_one({'_id': ObjectId(order_id)})
     total_sum = 0
     for product in order['products']:
@@ -681,8 +710,11 @@ def delete_product_order():
     order = orders_collection.find_one({'_id': ObjectId(order_id)})
     if order is None:
         return jsonify({'message': False}), 404
-    name = data.get('name')
-    orders_collection.update_one(order, {'$pull': {'products': {'name': name}}})
+    variation_id = data.get('variation_id')
+    try:
+        orders_collection.update_one(order, {'$pull': {'products': {'_id': ObjectId(variation_id)}}})
+    except:
+        orders_collection.update_one(order, {'$pull': {'products': {'_id': variation_id}}})
     order = orders_collection.find_one({'_id': ObjectId(order_id)})
     total_sum = 0
     for product in order['products']:
@@ -1169,6 +1201,39 @@ def add_subwarehouse():
 
     warehouses_collection.insert_one(document)
     return jsonify({'message': True}), 200
+
+
+@application.route('/delete_subwarehouse', methods=['POST'])
+def delete_subwarehouse():
+    data = request.get_json()
+    access_token = data.get('access_token')
+    if check_token(access_token) is False:
+        return jsonify({'token': False}), 401
+    warehouse = data.get('warehouse')
+    subwarehouse = data.get('subwarehouse')
+
+    document = {'warehouse': warehouse,
+                'subwarehouse': subwarehouse}
+
+    warehouses_collection.delete_one(document)
+    return jsonify({'message': True}), 200
+
+
+@application.route('/subwarehouses', methods=['POST'])
+def subwarehouses():
+    data = request.get_json()
+    access_token = data.get('access_token')
+    if check_token(access_token) is False:
+        return jsonify({'token': False}), 401
+
+    documents = list(warehouses_collection.find())
+    for document in documents:
+        document['_id'] = str(document['_id'])
+
+    # Serialize the documents using json_util from pymongo and specify encoding
+    response = Response(json_util.dumps({'subwarehouses': documents}, ensure_ascii=False).encode('utf-8'),
+            content_type='application/json;charset=utf-8')
+    return response, 200
 
 
 if __name__ == '__main__':
