@@ -1033,7 +1033,7 @@ def products():
 
     filter_criteria = {}
     if keyword:
-        tasks_collection.create_index([("$**", "text")])
+        products_collection.create_index([("$**", "text")])
         filter_criteria['$text'] = {'$search': keyword}
     if warehouse:
         regex_pattern = f'.*{re.escape(warehouse)}.*'
