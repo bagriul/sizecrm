@@ -1120,8 +1120,24 @@ def update_product():
     product['subwarehouse'] = data.get('subwarehouse', product['subwarehouse'])
     product['comment'] = data.get('comment', product['comment'])
 
-    # Update the task in the database
+    variations = data.get('variations')
+    if variations:
+        new_variations = []
+        for variation in variations:
+            document = variations_collection.find_one({'_id': ObjectId(variation)})
+            new_variations.append(document)
+        product['variations'] = new_variations
+    else:
+        product['variations'] = []
     products_collection.update_one({'_id': ObjectId(product_id)}, {'$set': product})
+
+    product = products_collection.find_one({'_id': ObjectId(product_id)})
+    pieces = 0
+    for variation in product['variations']:
+        pieces += variation['in_stock']
+    products_collection.find_one_and_update(product, {'$set': {'pieces': pieces}})
+    products_collection.find_one_and_update(product, {'$set': {'variations_num': len(variations)}})
+
     return jsonify({'message': True}), 200
 
 
