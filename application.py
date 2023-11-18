@@ -562,7 +562,6 @@ def add_order():
     access_token = data.get('access_token')
     if check_token(access_token) is False:
         return jsonify({'token': False}), 401
-    date = data.get('date')
     client = data.get('client')
     email = data.get('email')
     shipping = data.get('shipping')
@@ -592,7 +591,12 @@ def add_order():
     for product in products:
         total_sum += product['price']
 
-    document = {'date': datetime.strptime(date, "%a %b %d %Y"),
+    # Get today's date
+    today = datetime.today()
+    # Format the date
+    formatted_date = today.strftime("%a %b %d %Y")
+
+    document = {'date': formatted_date,
                 'client': client,
                 'email': email,
                 'shipping': shipping,
@@ -637,7 +641,7 @@ def update_order():
     # Update task fields based on the provided data
     order['client'] = data.get('client', order['client'])
     order['email'] = data.get('email', order['email'])
-    order['date'] = datetime.strptime(data.get('date', order['date']), "%a %b %d %Y")
+    #order['date'] = datetime.strptime(data.get('date', order['date']), "%a %b %d %Y")
     order['shipping'] = data.get('shipping', order['shipping'])
     status = data.get('status')
     if status:
@@ -649,7 +653,22 @@ def update_order():
     order['payment'] = data.get('payment', order['payment'])
     order['comment'] = data.get('comment', order['comment'])
 
+    products = data.get('products')
+    if products:
+        new_products = []
+        for product in products:
+            document = variations_collection.find_one({'_id': ObjectId(product)})
+            new_products.append(document)
+        order['products'] = new_products
+    else:
+        order['products'] = []
     orders_collection.update_one({'_id': ObjectId(order_id)}, {'$set': order})
+
+    order = orders_collection.find_one({'_id': ObjectId(order_id)})
+    total_sum = 0
+    for product in order['products']:
+        total_sum += product['price']
+    orders_collection.find_one_and_update(order, {'$set': {'total_sum': total_sum}})
     return jsonify({'message': True}), 200
 
 
