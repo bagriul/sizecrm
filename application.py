@@ -24,6 +24,8 @@ tasks_collection = db['tasks']
 products_collection = db['products']
 warehouses_collection = db['warehouses']
 variations_collection = db['variations']
+transactions_collection = db['transactions']
+cashiers_collection = db['cashiers']
 
 
 @application.route('/', methods=['GET'])
@@ -573,6 +575,8 @@ def add_order():
     payment = data.get('payment')
     comment = data.get('comment')
     variations_id = data.get('products')
+    discount_sum = data.get('discount_sum', None)
+    discount_per = data.get('discount_per', None)
 
     products = []
     for variation_id in variations_id:
@@ -591,6 +595,11 @@ def add_order():
     for product in products:
         total_sum += product['price']
 
+    if discount_sum:
+        total_sum = total_sum - discount_sum
+    if discount_per:
+        total_sum = total_sum - (total_sum * discount_per / 100)
+
     # Get today's date
     today = datetime.today()
     # Format the date
@@ -605,6 +614,8 @@ def add_order():
                 'payment': payment,
                 'comment': comment,
                 'products': products,
+                'discount_sum': discount_sum,
+                'discount_per': discount_per,
                 'total_sum': total_sum}
 
     is_present = orders_collection.find_one(document)
@@ -998,6 +1009,7 @@ def add_product():
     comment = data.get('comment')
     variations = data.get('variations')
     subwarehouse = data.get('subwarehouse')
+    cost_price = data.get('cost_price')
 
     pieces = sum(variation.get('in_stock', 0) for variation in variations)
 
@@ -1010,7 +1022,8 @@ def add_product():
                 'comment': comment,
                 'variations': variations,
                 'pieces': pieces,
-                'variations_num': len(variations)}
+                'variations_num': len(variations),
+                'cost_price': cost_price}
 
     products_collection.insert_one(document)
     for variation in variations:
@@ -1119,6 +1132,7 @@ def update_product():
     product['warehouse'] = data.get('warehouse', product['warehouse'])
     product['subwarehouse'] = data.get('subwarehouse', product['subwarehouse'])
     product['comment'] = data.get('comment', product['comment'])
+    product['cost_price'] = data.get('cost_price', product['cost_price'])
 
     variations = data.get('variations')
     if variations:
@@ -1268,6 +1282,254 @@ def subwarehouses():
     # Serialize the documents using json_util from pymongo and specify encoding
     response = Response(json_util.dumps({'subwarehouses': documents}, ensure_ascii=False).encode('utf-8'),
             content_type='application/json;charset=utf-8')
+    return response, 200
+
+
+@application.route('/add_transaction', methods=['POST'])
+def add_transaction():
+    data = request.get_json()
+    access_token = data.get('access_token')
+    if check_token(access_token) is False:
+        return jsonify({'token': False}), 401
+
+    type = data.get('type')
+    cashier = data.get('cashier')
+    amount = data.get('sum')
+    counterpartie = data.get('counterpartie')
+    date = data.get('date')
+    category = data.get('category')
+    comment = data.get('comment')
+
+    document = {
+        'type': type,
+        'cashier': cashier,
+        'sum': amount,
+        'counterpartie': counterpartie,
+        'date': date,
+        'category': category,
+        'comment': comment
+    }
+
+    transactions_collection.insert_one(document)
+
+    cashier_doc = cashiers_collection.find_one({'name': cashier})
+
+    if document['type'] == 'На рахунок':
+        cashier_doc['incomes'] += amount
+        cashiers_collection.find_one_and_update(
+            {'name': cashier},
+            {'$set': {'incomes': cashier_doc['incomes']}}
+        )
+    elif document['type'] == 'З рахунку':
+        cashier_doc['expenses'] += amount
+        cashiers_collection.find_one_and_update(
+            {'name': cashier},
+            {'$set': {'expenses': cashier_doc['expenses']}}
+        )
+
+    # Assuming you have an '_id' field in your document
+    transactions_collection.find_one_and_update(
+        {'_id': document['_id']},
+        {'$set': {'total_left': cashier_doc['incomes'] - cashier_doc['expenses']}}
+    )
+
+    return jsonify({'message': True})
+
+
+@application.route('/update_transaction', methods=['POST'])
+def update_transaction():
+    data = request.get_json()
+    access_token = data.get('access_token')
+    if check_token(access_token) is False:
+        return jsonify({'token': False}), 401
+
+    transaction_id = data.get('transaction_id')
+    transaction = transactions_collection.find_one({'_id': ObjectId(transaction_id)})
+    if transaction is None:
+        return jsonify({'message': False}), 404
+
+    # Update task fields based on the provided data
+    transaction['type'] = data.get('type', transaction['type'])
+    transaction['cashier'] = data.get('cashier', transaction['cashier'])
+    transaction['sum'] = data.get('sum', transaction['sum'])
+    transaction['counterpartie'] = data.get('counterpartie', transaction['counterpartie'])
+    transaction['category'] = data.get('category', transaction['category'])
+    transaction['comment'] = data.get('comment', transaction['comment'])
+    transaction['date'] = data.get('date', transaction['date'])
+
+    # Update the task in the database
+    transactions_collection.update_one({'_id': ObjectId(transaction_id)}, {'$set': transaction})
+
+    cashier = cashiers_collection.find_one({'name': transaction['cashier']})
+    transactions = transactions_collection.find({'cashier': transaction['cashier']})
+    incomes = 0
+    expenses = 0
+    for transaction in transactions:
+        if transaction['type'] == 'На рахунок':
+            incomes += transaction['sum']
+        if transaction['type'] == 'З рахунку':
+            expenses += transaction['sum']
+    cashiers_collection.find_one_and_update(cashier, {'$set': {'incomes': incomes}})
+    cashiers_collection.find_one_and_update(cashier, {'$set': {'expenses': expenses}})
+
+    return jsonify({'message': True}), 200
+
+
+@application.route('/delete_transaction', methods=['POST'])
+def delete_transaction():
+    data = request.get_json()
+    access_token = data.get('access_token')
+    if check_token(access_token) is False:
+        return jsonify({'token': False}), 401
+
+    transaction_id = data.get('transaction_id')
+    transaction = transactions_collection.find_one({'_id': ObjectId(transaction_id)})
+    transactions_collection.find_one_and_delete({'_id': ObjectId(transaction_id)})
+
+    cashier = cashiers_collection.find_one({'name': transaction['cashier']})
+    transactions = transactions_collection.find({'cashier': transaction['cashier']})
+    incomes = 0
+    expenses = 0
+    for transaction in transactions:
+        if transaction['type'] == 'На рахунок':
+            incomes += transaction['sum']
+        if transaction['type'] == 'З рахунку':
+            expenses += transaction['sum']
+    cashiers_collection.find_one_and_update(cashier, {'$set': {'incomes': incomes}})
+    cashiers_collection.find_one_and_update(cashier, {'$set': {'expenses': expenses}})
+
+    return jsonify({'message': True}), 200
+
+
+@application.route('/transactions', methods=['POST'])
+def transactions():
+    data = request.get_json()
+    access_token = data.get('access_token')
+    if check_token(access_token) is False:
+        return jsonify({'token': False}), 401
+    keyword = data.get('keyword')
+    page = data.get('page', 1)  # Default to page 1 if not provided
+    per_page = data.get('per_page', 10)  # Default to 10 items per page if not provided
+
+    filter_criteria = {}
+    if keyword:
+        transactions_collection.create_index([("$**", "text")])
+        filter_criteria['$text'] = {'$search': keyword}
+
+    # Count the total number of clients that match the filter criteria
+    total_transactions = transactions_collection.count_documents(filter_criteria)
+
+    total_pages = math.ceil(total_transactions / per_page)
+
+    # Paginate the query results using skip and limit, and apply filters
+    skip = (page - 1) * per_page
+    documents = list(transactions_collection.find(filter_criteria).skip(skip).limit(per_page))
+    for document in documents:
+        document['_id'] = str(document['_id'])
+
+    # Calculate the range of clients being displayed
+    start_range = skip + 1
+    end_range = min(skip + per_page, total_transactions)
+
+    # Serialize the documents using json_util from pymongo and specify encoding
+    response = Response(json_util.dumps(
+        {'transactions': documents, 'total_transactions': total_transactions, 'start_range': start_range, 'end_range': end_range,
+         'total_pages': total_pages},
+        ensure_ascii=False).encode('utf-8'),
+                        content_type='application/json;charset=utf-8')
+    return response, 200
+
+
+@application.route('/add_cashier', methods=['POST'])
+def add_cashier():
+    data = request.get_json()
+    access_token = data.get('access_token')
+    if check_token(access_token) is False:
+        return jsonify({'token': False}), 401
+
+    name = data.get('name')
+    type = data.get('type')
+    document = {'name': name,
+                'type': type,
+                'incomes': 0,
+                'expenses': 0}
+    is_present = cashiers_collection.find_one(document)
+    if is_present is None:
+        cashiers_collection.insert_one(document)
+        return jsonify({'message': True}), 200
+    else:
+        return jsonify({'message': False}), 409
+
+
+@application.route('/delete_cashier', methods=['POST'])
+def delete_cashier():
+    data = request.get_json()
+    access_token = data.get('access_token')
+    if check_token(access_token) is False:
+        return jsonify({'token': False}), 401
+
+    cashier_id = data.get('cashier_id')
+    cashiers_collection.find_one_and_delete({'_id': ObjectId(cashier_id)})
+    return jsonify({'message': True}), 200
+
+
+@application.route('/cashiers', methods=['POST'])
+def cashiers():
+    data = request.get_json()
+    access_token = data.get('access_token')
+    if check_token(access_token) is False:
+        return jsonify({'token': False}), 401
+    keyword = data.get('keyword')
+    page = data.get('page', 1)  # Default to page 1 if not provided
+    per_page = data.get('per_page', 10)  # Default to 10 items per page if not provided
+
+    filter_criteria = {}
+    if keyword:
+        cashiers_collection.create_index([("$**", "text")])
+        filter_criteria['$text'] = {'$search': keyword}
+
+    # Count the total number of clients that match the filter criteria
+    total_cashiers = cashiers_collection.count_documents(filter_criteria)
+
+    total_pages = math.ceil(total_cashiers / per_page)
+
+    # Paginate the query results using skip and limit, and apply filters
+    skip = (page - 1) * per_page
+    documents = list(cashiers_collection.find(filter_criteria).skip(skip).limit(per_page))
+    for document in documents:
+        document['_id'] = str(document['_id'])
+    for document in documents:
+        incomes = 0
+        expenses = 0
+        transactions = transactions_collection.find()
+        for transaction in transactions:
+            if transaction['type'] == 'На рахунок':
+                incomes += transaction['sum']
+            elif transaction['type'] == 'З рахунку':
+                expenses += transaction['sum']
+        balance = incomes - expenses
+        cashiers_collection.find_one_and_update(document, {'$set': {'incomes': incomes}})
+        cashiers_collection.find_one_and_update(document, {'$set': {'expenses': expenses}})
+        cashiers_collection.find_one_and_update(document, {'$set': {'balance': balance}})
+
+    # Calculate the range of clients being displayed
+    start_range = skip + 1
+    end_range = min(skip + per_page, total_cashiers)
+
+    cashiers = cashiers_collection.find()
+    total_incomes = 0
+    total_expenses = 0
+    for cashier in cashiers:
+        cashier['incomes'] += total_incomes
+        cashier['expenses'] += total_expenses
+    total_balance = total_incomes - total_expenses
+
+    # Serialize the documents using json_util from pymongo and specify encoding
+    response = Response(json_util.dumps(
+        {'cashiers': documents, 'total_cashiers': total_cashiers, 'start_range': start_range, 'end_range': end_range,
+         'total_pages': total_pages, 'total_balance': total_balance, 'total_incomes': total_incomes, 'total_expenses': total_expenses},
+        ensure_ascii=False).encode('utf-8'),
+                        content_type='application/json;charset=utf-8')
     return response, 200
 
 
