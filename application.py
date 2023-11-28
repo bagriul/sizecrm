@@ -1498,8 +1498,6 @@ def cashiers():
     skip = (page - 1) * per_page
     documents = list(cashiers_collection.find(filter_criteria).skip(skip).limit(per_page))
     for document in documents:
-        document['_id'] = str(document['_id'])
-    for document in documents:
         incomes = 0
         expenses = 0
         transactions = transactions_collection.find()
@@ -1509,9 +1507,17 @@ def cashiers():
             elif transaction['type'] == 'З рахунку':
                 expenses += transaction['sum']
         balance = incomes - expenses
-        cashiers_collection.find_one_and_update(document, {'$set': {'incomes': incomes}})
-        cashiers_collection.find_one_and_update(document, {'$set': {'expenses': expenses}})
-        cashiers_collection.find_one_and_update(document, {'$set': {'balance': balance}})
+        print(incomes, expenses, balance)
+        cashiers_collection.find_one_and_update({'name': transaction['cashier']}, {
+            '$set': {
+                'incomes': incomes,
+                'expenses': expenses,
+                'balance': balance
+            }
+        })
+    documents = list(cashiers_collection.find(filter_criteria).skip(skip).limit(per_page))
+    for document in documents:
+        document['_id'] = str(document['_id'])
 
     # Calculate the range of clients being displayed
     start_range = skip + 1
@@ -1602,4 +1608,4 @@ def counterparties():
 
 
 if __name__ == '__main__':
-    application.run()
+    application.run(port=4999)
