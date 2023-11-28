@@ -1011,6 +1011,7 @@ def add_product():
     variations = data.get('variations')
     subwarehouse = data.get('subwarehouse')
     cost_price = data.get('cost_price')
+    photo = data.get('photo')
 
     pieces = sum(variation.get('in_stock', 0) for variation in variations)
 
@@ -1024,7 +1025,8 @@ def add_product():
                 'variations': variations,
                 'pieces': pieces,
                 'variations_num': len(variations),
-                'cost_price': cost_price}
+                'cost_price': cost_price,
+                'photo': photo}
 
     products_collection.insert_one(document)
     for variation in variations:
@@ -1134,6 +1136,7 @@ def update_product():
     product['subwarehouse'] = data.get('subwarehouse', product['subwarehouse'])
     product['comment'] = data.get('comment', product['comment'])
     product['cost_price'] = data.get('cost_price', product['cost_price'])
+    product['photo'] = data.get('photo', product['photo'])
 
     variations = data.get('variations')
     if variations:
@@ -1156,7 +1159,19 @@ def update_product():
     return jsonify({'message': True}), 200
 
 
-@application.route('/add_variation', methods=['POST'])
+@application.route('/delete_product', methods=['POST'])
+def delete_product():
+    data = request.get_json()
+    access_token = data.get('access_token')
+    if check_token(access_token) is False:
+        return jsonify({'token': False}), 401
+
+    product_id = data.get('product_id')
+    products_collection.find_one_and_delete({'_id': ObjectId(product_id)})
+    return jsonify({'message': True}), 200
+
+
+'''@application.route('/add_variation', methods=['POST'])
 def add_variation():
     data = request.get_json()
     access_token = data.get('access_token')
@@ -1202,18 +1217,6 @@ def delete_variation():
     return jsonify({'message': True}), 200
 
 
-@application.route('/delete_product', methods=['POST'])
-def delete_product():
-    data = request.get_json()
-    access_token = data.get('access_token')
-    if check_token(access_token) is False:
-        return jsonify({'token': False}), 401
-
-    product_id = data.get('product_id')
-    products_collection.find_one_and_delete({'_id': ObjectId(product_id)})
-    return jsonify({'message': True}), 200
-
-
 @application.route('/variations', methods=['POST'])
 def variations():
     data = request.get_json()
@@ -1234,7 +1237,7 @@ def variations():
     # Serialize the documents using json_util from pymongo and specify encoding
     response = Response(json_util.dumps({'variations': documents}, ensure_ascii=False).encode('utf-8'),
             content_type='application/json;charset=utf-8')
-    return response, 200
+    return response, 200'''
 
 
 @application.route('/add_subwarehouse', methods=['POST'])
@@ -1507,7 +1510,6 @@ def cashiers():
             elif transaction['type'] == 'З рахунку':
                 expenses += transaction['sum']
         balance = incomes - expenses
-        print(incomes, expenses, balance)
         cashiers_collection.find_one_and_update({'name': transaction['cashier']}, {
             '$set': {
                 'incomes': incomes,
