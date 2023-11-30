@@ -9,6 +9,8 @@ from datetime import datetime, timedelta
 import base64
 import json
 import math
+from flask import Flask, redirect, url_for
+from flask_dance.contrib.google import make_google_blueprint, google
 
 application = Flask(__name__)
 CORS(application)
@@ -27,6 +29,12 @@ variations_collection = db['variations']
 transactions_collection = db['transactions']
 cashiers_collection = db['cashiers']
 counterparties_collection = db['counterparties']
+auto_transactions_collection = db['auto_transactions']
+
+google_bp = make_google_blueprint(client_id='YOUR_GOOGLE_CLIENT_ID',
+                                  client_secret='YOUR_GOOGLE_CLIENT_SECRET',
+                                  redirect_to='google_login')
+application.register_blueprint(google_bp, url_prefix='/google_login')
 
 
 @application.route('/', methods=['GET'])
@@ -163,6 +171,15 @@ def login():
     else:
         response = jsonify({'message': 'Invalid credentials'}), 401
         return response
+
+
+@application.route('/google_login')
+def login_google():
+    if not google.authorized:
+        return redirect(url_for('google.login'))
+    resp = google.get('/plus/v1/people/me')
+    assert resp.ok, resp.text
+    return 'You are connected with Google as: {0}'.format(resp.json()['displayName'])
 
 
 # Endpoint for user registration
@@ -1411,6 +1428,7 @@ def transactions():
     access_token = data.get('access_token')
     if check_token(access_token) is False:
         return jsonify({'token': False}), 401
+
     keyword = data.get('keyword')
     page = data.get('page', 1)  # Default to page 1 if not provided
     per_page = data.get('per_page', 10)  # Default to 10 items per page if not provided
@@ -1420,7 +1438,7 @@ def transactions():
         transactions_collection.create_index([("$**", "text")])
         filter_criteria['$text'] = {'$search': keyword}
 
-    # Count the total number of clients that match the filter criteria
+    # Count the total number of transactions that match the filter criteria
     total_transactions = transactions_collection.count_documents(filter_criteria)
 
     total_pages = math.ceil(total_transactions / per_page)
@@ -1431,7 +1449,13 @@ def transactions():
     for document in documents:
         document['_id'] = str(document['_id'])
 
-    # Calculate the range of clients being displayed
+    # Sorting logic
+    sort_by = data.get('sort_by')
+    if sort_by:
+        reverse_sort = data.get('reverse_sort', False)
+        documents = sorted(documents, key=lambda x: x.get(sort_by, 0), reverse=reverse_sort)
+
+    # Calculate the range of transactions being displayed
     start_range = skip + 1
     end_range = min(skip + per_page, total_transactions)
 
@@ -1442,6 +1466,116 @@ def transactions():
         ensure_ascii=False).encode('utf-8'),
                         content_type='application/json;charset=utf-8')
     return response, 200
+
+
+@application.route('/add_auto_transaction', methods=['POST'])
+def add_auto_transaction():
+    data = request.get_json()
+    access_token = data.get('access_token')
+    if check_token(access_token) is False:
+        return jsonify({'token': False}), 401
+
+    receiver = data.get('receiver')
+    date = data.get('date')
+    frequency = data.get('frequency')
+    sum = data.get('sum')
+
+    document = {
+        'receiver': receiver,
+        'date': date,
+        'frequency': frequency,
+        'sum': sum
+    }
+
+    transactions_collection.insert_one(document)
+
+    cashier_doc = cashiers_collection.find_one({'name': cashier})
+
+    if document['type'] == 'На рахунок':
+        cashier_doc['incomes'] += amount
+        cashiers_collection.find_one_and_update(
+            {'name': cashier},
+            {'$set': {'incomes': cashier_doc['incomes']}}
+        )
+    elif document['type'] == 'З рахунку':
+        cashier_doc['expenses'] += amount
+        cashiers_collection.find_one_and_update(
+            {'name': cashier},
+            {'$set': {'expenses': cashier_doc['expenses']}}
+        )
+
+    # Assuming you have an '_id' field in your document
+    transactions_collection.find_one_and_update(
+        {'_id': document['_id']},
+        {'$set': {'total_left': cashier_doc['incomes'] - cashier_doc['expenses']}}
+    )
+
+    return jsonify({'message': True})
+
+
+@application.route('/update_transaction', methods=['POST'])
+def update_transaction():
+    data = request.get_json()
+    access_token = data.get('access_token')
+    if check_token(access_token) is False:
+        return jsonify({'token': False}), 401
+
+    transaction_id = data.get('transaction_id')
+    transaction = transactions_collection.find_one({'_id': ObjectId(transaction_id)})
+    if transaction is None:
+        return jsonify({'message': False}), 404
+
+    # Update task fields based on the provided data
+    transaction['type'] = data.get('type', transaction['type'])
+    transaction['cashier'] = data.get('cashier', transaction['cashier'])
+    transaction['sum'] = data.get('sum', transaction['sum'])
+    transaction['counterpartie'] = data.get('counterpartie', transaction['counterpartie'])
+    transaction['category'] = data.get('category', transaction['category'])
+    transaction['comment'] = data.get('comment', transaction['comment'])
+    transaction['date'] = data.get('date', transaction['date'])
+
+    # Update the task in the database
+    transactions_collection.update_one({'_id': ObjectId(transaction_id)}, {'$set': transaction})
+
+    cashier = cashiers_collection.find_one({'name': transaction['cashier']})
+    transactions = transactions_collection.find({'cashier': transaction['cashier']})
+    incomes = 0
+    expenses = 0
+    for transaction in transactions:
+        if transaction['type'] == 'На рахунок':
+            incomes += transaction['sum']
+        if transaction['type'] == 'З рахунку':
+            expenses += transaction['sum']
+    cashiers_collection.find_one_and_update(cashier, {'$set': {'incomes': incomes}})
+    cashiers_collection.find_one_and_update(cashier, {'$set': {'expenses': expenses}})
+
+    return jsonify({'message': True}), 200
+
+
+@application.route('/delete_transaction', methods=['POST'])
+def delete_transaction():
+    data = request.get_json()
+    access_token = data.get('access_token')
+    if check_token(access_token) is False:
+        return jsonify({'token': False}), 401
+
+    transaction_id = data.get('transaction_id')
+    transaction = transactions_collection.find_one({'_id': ObjectId(transaction_id)})
+    transactions_collection.find_one_and_delete({'_id': ObjectId(transaction_id)})
+
+    cashier = cashiers_collection.find_one({'name': transaction['cashier']})
+    transactions = transactions_collection.find({'cashier': transaction['cashier']})
+    incomes = 0
+    expenses = 0
+    for transaction in transactions:
+        if transaction['type'] == 'На рахунок':
+            incomes += transaction['sum']
+        if transaction['type'] == 'З рахунку':
+            expenses += transaction['sum']
+    cashiers_collection.find_one_and_update(cashier, {'$set': {'incomes': incomes}})
+    cashiers_collection.find_one_and_update(cashier, {'$set': {'expenses': expenses}})
+
+    return jsonify({'message': True}), 200
 
 
 @application.route('/add_cashier', methods=['POST'])
@@ -1610,4 +1744,4 @@ def counterparties():
 
 
 if __name__ == '__main__':
-    application.run(port=4999)
+    application.run()
