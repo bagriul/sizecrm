@@ -9,8 +9,11 @@ from datetime import datetime, timedelta
 import base64
 import json
 import math
-from flask import Flask, redirect, url_for
+from flask import Flask, redirect, url_for, render_template
+from flask_mail import Mail, Message
 from flask_dance.contrib.google import make_google_blueprint, google
+import requests
+from io import BytesIO
 
 application = Flask(__name__)
 CORS(application)
@@ -30,11 +33,21 @@ transactions_collection = db['transactions']
 cashiers_collection = db['cashiers']
 counterparties_collection = db['counterparties']
 auto_transactions_collection = db['auto_transactions']
+demo_users_collection = db['demo_users']
 
 google_bp = make_google_blueprint(client_id='YOUR_GOOGLE_CLIENT_ID',
                                   client_secret='YOUR_GOOGLE_CLIENT_SECRET',
                                   redirect_to='google_login')
 application.register_blueprint(google_bp, url_prefix='/google_login')
+
+application.config['MAIL_SERVER'] = 'smtp.gmail.com'
+application.config['MAIL_PORT'] = 465  # Use your mail server's port
+application.config['MAIL_USE_TLS'] = False
+application.config['MAIL_USE_SSL'] = True
+application.config['MAIL_USERNAME'] = 'size.crm@gmail.com'
+application.config['MAIL_PASSWORD'] = 'wchg bcif xkkr oqga'
+application.config['MAIL_DEFAULT_SENDER'] = 'size.crm@gmail.com'
+mail = Mail(application)
 
 
 @application.route('/', methods=['GET'])
@@ -213,6 +226,63 @@ def register():
     else:
         response = jsonify({'message': 'Unknown error'}), 401
         return response
+
+
+@application.route('/demo_register', methods=['POST'])
+def demo_register():
+    # Replace with your GitHub PDF link
+    github_pdf_link = 'https://github.com/bagriul/sizecrm/blob/main/presentation_size.pdf'
+
+    # Download PDF from GitHub
+    pdf_response = requests.get(github_pdf_link)
+    pdf_data = BytesIO(pdf_response.content)
+
+    # Create Flask-Mail message
+    subject = 'Презентація СРМ для вашого бізнесу'
+    sender_email = 'size.crm@gmail.com'
+    data = request.get_json()
+    to_email = data.get('email')
+    message_body = ''
+
+    msg = Message(subject, sender=sender_email, recipients=[to_email])
+    msg.body = message_body
+    msg.attach('presentation_size.pdf', 'application/pdf', pdf_data.getvalue())
+
+    # Send the email
+    try:
+        mail.send(msg)
+        name = data.get('name')
+        phone = data.get('phone')
+        brand = data.get('brand')
+        position = data.get('position')
+        document = {'name': name,
+                    'phone': phone,
+                    'brand': brand,
+                    'position': position,
+                    'email': to_email}
+        is_present = demo_users_collection.find_one(document)
+        if is_present is None:
+            demo_users_collection.insert_one(document)
+        return 'Email sent successfully!'
+    except Exception as e:
+        return f'Error sending email: {str(e)}'
+
+
+def send_welcome_email(email):
+    msg = Message('Презентація СРМ для вашого бізнесу', recipients=[email])
+
+    # Customize the email content
+    msg.body = ''
+
+    pdf_file_url = 'https://raw.githubusercontent.com/bagriul/sizecrm/main/%D0%9F%D1%80%D0%B5%D0%B7%D0%B5%D0%BD%D1%82%D0%B0%D1%86%D1%96%D1%8F%20Size%20CRM.pdf'
+
+    # Download the PDF file from the URL
+    response = requests.get(pdf_file_url)
+
+    # Attach the PDF file to the email
+    msg.attach('%D0%9F%D1%80%D0%B5%D0%B7%D0%B5%D0%BD%D1%82%D0%B0%D1%86%D1%96%D1%8F%20Size%20CRM.pdf', 'application/pdf', response.content)
+
+    mail.send(msg)
 
 
 # Endpoint to add new client
