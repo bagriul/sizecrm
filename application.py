@@ -14,6 +14,7 @@ from flask_mail import Mail, Message
 from flask_dance.contrib.google import make_google_blueprint, google
 import requests
 from io import BytesIO
+from uuid import uuid4
 
 application = Flask(__name__)
 CORS(application)
@@ -1082,16 +1083,20 @@ def users():
 def add_product():
     data = request.get_json()
     access_token = data.get('access_token')
+
     if check_token(access_token) is False:
         return jsonify({'token': False}), 401
+
     name = data.get('name')
     description = data.get('description')
     status = data.get('status')
     type = data.get('status_type')
+
     if status:
         status_doc = statuses_collection.find_one({'status': status, 'type': type})
         if status_doc:
             del status_doc['_id']
+
     category = data.get('category')
     warehouse = data.get('warehouse')
     comment = data.get('comment')
@@ -1100,25 +1105,35 @@ def add_product():
     cost_price = data.get('cost_price')
     photo = data.get('photo')
 
+    # Generate a unique ID for each variation
+    for variation in variations:
+        variation['_id'] = str(uuid4())
+
+    # Check if the generated IDs already exist in the database
+    existing_ids = set(product['_id'] for product in products_collection.find({}, {'_id': 1}))
+    for variation in variations:
+        while variation['_id'] in existing_ids:
+            # Regenerate the ID until it's unique
+            variation['_id'] = str(uuid4())
+
     pieces = sum(variation.get('in_stock', 0) for variation in variations)
 
-    document = {'name': name,
-                'description': description,
-                'status': status_doc,
-                'category': category,
-                'warehouse': warehouse,
-                'subwarehouse': subwarehouse,
-                'comment': comment,
-                'variations': variations,
-                'pieces': pieces,
-                'variations_num': len(variations),
-                'cost_price': cost_price,
-                'photo': photo}
+    document = {
+        'name': name,
+        'description': description,
+        'status': status_doc,
+        'category': category,
+        'warehouse': warehouse,
+        'subwarehouse': subwarehouse,
+        'comment': comment,
+        'variations': variations,
+        'pieces': pieces,
+        'variations_num': len(variations),
+        'cost_price': cost_price,
+        'photo': photo
+    }
 
     products_collection.insert_one(document)
-    for variation in variations:
-        variation['name'] = name
-        variations_collection.insert_one(variation)
     return jsonify({'message': True}), 200
 
 
