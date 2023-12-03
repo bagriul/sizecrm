@@ -15,6 +15,7 @@ from flask_dance.contrib.google import make_google_blueprint, google
 import requests
 from io import BytesIO
 from uuid import uuid4
+from flask_bcrypt import Bcrypt
 
 application = Flask(__name__)
 CORS(application)
@@ -49,6 +50,8 @@ application.config['MAIL_USERNAME'] = 'size.crm@gmail.com'
 application.config['MAIL_PASSWORD'] = 'wchg bcif xkkr oqga'
 application.config['MAIL_DEFAULT_SENDER'] = 'size.crm@gmail.com'
 mail = Mail(application)
+
+bcrypt = Bcrypt(application)
 
 
 @application.route('/', methods=['GET'])
@@ -167,33 +170,35 @@ def login():
     email = data.get('email')
     password = data.get('password')
 
-    # Check if the user exists in the database and the password matches
-    user = users_collection.find_one({'email': email, 'password': password})
+    # Check if the user exists in the database
+    user = users_collection.find_one({'email': email})
 
     if user:
-        user_id = str(user['_id'])  # Assuming user ID is stored as ObjectId in MongoDB
-        # Generate tokens based on user ID
-        access_token = jwt.encode(
-            {'user_id': user_id, 'exp': datetime.utcnow() + timedelta(minutes=30)},
-            application.config['SECRET_KEY'], algorithm='HS256')
-        refresh_token = jwt.encode(
-            {'user_id': user_id, 'exp': datetime.utcnow() + timedelta(days=1)},
-            application.config['SECRET_KEY'], algorithm='HS256')
+        hashed_password_in_db = user.get('password', '')  # Assuming the field name is 'password'
 
-        response = jsonify({'access_token': access_token, 'refresh_token': refresh_token}), 200
-        return response
-    else:
-        response = jsonify({'message': 'Invalid credentials'}), 401
-        return response
+        # Print or log the hashed password in the database for debugging
+        #print(f"Hashed Password in DB: {hashed_password_in_db}")
 
+        if bcrypt.check_password_hash(hashed_password_in_db, password):
+            user_id = str(user['_id'])  # Assuming user ID is stored as ObjectId in MongoDB
 
-@application.route('/google_login')
-def login_google():
-    if not google.authorized:
-        return redirect(url_for('google.login'))
-    resp = google.get('/plus/v1/people/me')
-    assert resp.ok, resp.text
-    return 'You are connected with Google as: {0}'.format(resp.json()['displayName'])
+            # Generate tokens based on user ID
+            access_token = jwt.encode(
+                {'user_id': user_id, 'exp': datetime.utcnow() + timedelta(minutes=30)},
+                application.config['SECRET_KEY'], algorithm='HS256')
+            refresh_token = jwt.encode(
+                {'user_id': user_id, 'exp': datetime.utcnow() + timedelta(days=1)},
+                application.config['SECRET_KEY'], algorithm='HS256')
+
+            response = jsonify({'access_token': access_token, 'refresh_token': refresh_token}), 200
+            return response
+
+    # Print or log the hashed password generated during login for debugging
+    hashed_password_for_login = bcrypt.generate_password_hash(password).decode('utf-8')
+    #print(f"Hashed Password for Login: {hashed_password_for_login}")
+
+    response = jsonify({'message': 'Invalid credentials'}), 401
+    return response
 
 
 # Endpoint for user registration
@@ -207,25 +212,29 @@ def register():
     password = data.get('password')
     password2 = data.get('password2')
 
-    document = {'name': name,
-                'phone': phone,
-                'email': email,
-                'password': password,
-                'password2': password2,
-                'userpic': default_userpic}
+    if password != password2:
+        return ({'message': False}), 409
+
+    # Hash the password using bcrypt
+    hashed_password = bcrypt.generate_password_hash(password).decode('utf-8')
+
+    document = {
+        'name': name,
+        'phone': phone,
+        'email': email,
+        'password': hashed_password,
+        'password2': hashed_password,
+        'userpic': default_userpic
+    }
+
     is_present = users_collection.find_one({'email': email})
-    if (is_present is None) and (password == password2):
+
+    if (is_present is None) and (bcrypt.check_password_hash(hashed_password, password)):
         users_collection.insert_one(document)
-        response = jsonify({'message': 'User created successfully'}), 200
-        return response
-    elif password != password2:
-        response = jsonify({'message': 'Not matching passwords'}), 401
-        return response
-    elif is_present is not None:
-        response = jsonify({'message': 'User already exists'}), 409
+        response = jsonify({'message': True}), 200
         return response
     else:
-        response = jsonify({'message': 'Unknown error'}), 401
+        response = jsonify({'message': False}), 401
         return response
 
 
@@ -247,6 +256,7 @@ def demo_register():
 
     msg = Message(subject, sender=sender_email, recipients=[to_email])
     msg.body = message_body
+    pdf_data.seek(0)
     msg.attach('presentation_size.pdf', 'application/pdf', pdf_data.getvalue())
 
     # Send the email
