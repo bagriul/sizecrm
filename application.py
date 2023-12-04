@@ -1252,11 +1252,7 @@ def update_product():
 
     variations = data.get('variations')
     if variations:
-        new_variations = []
-        for variation in variations:
-            document = variations_collection.find_one({'_id': ObjectId(variation)})
-            new_variations.append(document)
-        product['variations'] = new_variations
+        product['variations'] = variations
     else:
         product['variations'] = []
     products_collection.update_one({'_id': ObjectId(product_id)}, {'$set': product})
