@@ -1404,102 +1404,95 @@ def add_transaction():
     if check_token(access_token) is False:
         return jsonify({'token': False}), 401
 
-    type = data.get('type')
-    cashier = data.get('cashier')
-    amount = data.get('sum')
-    counterpartie = data.get('counterpartie')
-    date = data.get('date')
-    category = data.get('category')
-    comment = data.get('comment')
+    if data.get('recuring') == False:
+        type = data.get('type')
+        cashier = data.get('cashier')
+        amount = data.get('sum')
+        counterpartie = data.get('counterpartie')
+        date = data.get('date')
+        category = data.get('category')
+        comment = data.get('comment')
 
-    document = {
-        'type': type,
-        'cashier': cashier,
-        'sum': amount,
-        'counterpartie': counterpartie,
-        'date': date,
-        'category': category,
-        'comment': comment
-    }
+        document = {
+            'type': type,
+            'cashier': cashier,
+            'sum': amount,
+            'counterpartie': counterpartie,
+            'date': date,
+            'category': category,
+            'comment': comment
+        }
 
-    transactions_collection.insert_one(document)
+        transactions_collection.insert_one(document)
 
-    cashier_doc = cashiers_collection.find_one({'name': cashier})
+        cashier_doc = cashiers_collection.find_one({'name': cashier})
 
-    if document['type'] == 'На рахунок':
-        cashier_doc['incomes'] += amount
-        cashiers_collection.find_one_and_update(
-            {'name': cashier},
-            {'$set': {'incomes': cashier_doc['incomes']}}
-        )
-    elif document['type'] == 'З рахунку':
-        cashier_doc['expenses'] += amount
-        cashiers_collection.find_one_and_update(
-            {'name': cashier},
-            {'$set': {'expenses': cashier_doc['expenses']}}
-        )
+        if document['type'] == 'На рахунок':
+            cashier_doc['incomes'] += amount
+            cashiers_collection.find_one_and_update(
+                {'name': cashier},
+                {'$set': {'incomes': cashier_doc['incomes']}}
+            )
+        elif document['type'] == 'З рахунку':
+            cashier_doc['expenses'] += amount
+            cashiers_collection.find_one_and_update(
+                {'name': cashier},
+                {'$set': {'expenses': cashier_doc['expenses']}}
+            )
 
-    # Assuming you have an '_id' field in your document
-    transactions_collection.find_one_and_update(
-        {'_id': document['_id']},
-        {'$set': {'total_left': cashier_doc['incomes'] - cashier_doc['expenses']}}
-    )
-
-    return jsonify({'message': True})
-
-
-@application.route('/add_recuring_transaction', methods=['POST'])
-def add_recuring_transaction():
-    data = request.get_json()
-    access_token = data.get('access_token')
-    if check_token(access_token) is False:
-        return jsonify({'token': False}), 401
-
-    type = data.get('type')
-    cashier = data.get('cashier')
-    amount = data.get('sum')
-    counterpartie = data.get('counterpartie')
-    date = data.get('date')
-    category = data.get('category')
-    comment = data.get('comment')
-    periodicity = data.get('periodicity')
-
-    document = {
-        'type': type,
-        'cashier': cashier,
-        'sum': amount,
-        'counterpartie': counterpartie,
-        'date': date,
-        'category': category,
-        'comment': comment,
-        'periodicity': periodicity
-    }
-
-    transactions_collection.insert_one(document)
-    auto_transactions_collection.insert_one(document)
-
-    cashier_doc = cashiers_collection.find_one({'name': cashier})
-
-    if document['type'] == 'На рахунок':
-        cashier_doc['incomes'] += amount
-        cashiers_collection.find_one_and_update(
-            {'name': cashier},
-            {'$set': {'incomes': cashier_doc['incomes']}}
-        )
-    elif document['type'] == 'З рахунку':
-        cashier_doc['expenses'] += amount
-        cashiers_collection.find_one_and_update(
-            {'name': cashier},
-            {'$set': {'expenses': cashier_doc['expenses']}}
+        # Assuming you have an '_id' field in your document
+        transactions_collection.find_one_and_update(
+            {'_id': document['_id']},
+            {'$set': {'total_left': cashier_doc['incomes'] - cashier_doc['expenses']}}
         )
 
-    # Assuming you have an '_id' field in your document
-    transactions_collection.find_one_and_update(
-        {'_id': document['_id']},
-        {'$set': {'total_left': cashier_doc['incomes'] - cashier_doc['expenses']}}
-    )
+        return jsonify({'message': True})
+    elif data.get('recuring') == True:
+        type = data.get('type')
+        cashier = data.get('cashier')
+        amount = data.get('sum')
+        counterpartie = data.get('counterpartie')
+        date = data.get('date')
+        category = data.get('category')
+        comment = data.get('comment')
+        periodicity = data.get('periodicity')
 
-    return jsonify({'message': True})
+        document = {
+            'type': type,
+            'cashier': cashier,
+            'sum': amount,
+            'counterpartie': counterpartie,
+            'date': date,
+            'category': category,
+            'comment': comment,
+            'periodicity': periodicity
+        }
+
+        transactions_collection.insert_one(document)
+        auto_transactions_collection.insert_one(document)
+
+        cashier_doc = cashiers_collection.find_one({'name': cashier})
+
+        if document['type'] == 'На рахунок':
+            cashier_doc['incomes'] += amount
+            cashiers_collection.find_one_and_update(
+                {'name': cashier},
+                {'$set': {'incomes': cashier_doc['incomes']}}
+            )
+        elif document['type'] == 'З рахунку':
+            cashier_doc['expenses'] += amount
+            cashiers_collection.find_one_and_update(
+                {'name': cashier},
+                {'$set': {'expenses': cashier_doc['expenses']}}
+            )
+
+        # Assuming you have an '_id' field in your document
+        transactions_collection.find_one_and_update(
+            {'_id': document['_id']},
+            {'$set': {'total_left': cashier_doc['incomes'] - cashier_doc['expenses']}}
+        )
+
+        return jsonify({'message': True})
 
 
 @application.route('/update_transaction', methods=['POST'])
