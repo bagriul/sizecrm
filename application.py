@@ -1606,6 +1606,28 @@ def transactions():
     return response, 200
 
 
+@application.route('/transaction_info', methods=['POST'])
+def transaction_info():
+    data = request.get_json()
+    access_token = data.get('access_token')
+    if check_token(access_token) is False:
+        return jsonify({'token': False}), 401
+
+    transaction_id = data.get('transaction_id')
+    object_id = ObjectId(transaction_id)
+    transaction_document = transactions_collection.find_one({'_id': object_id})
+
+    if transaction_document:
+        # Convert ObjectId to string before returning the response
+        transaction_document['_id'] = str(transaction_document['_id'])
+
+        # Use dumps() to handle ObjectId serialization
+        return json.dumps(transaction_document, default=str), 200, {'Content-Type': 'application/json'}
+    else:
+        response = jsonify({'message': 'Transaction not found'}), 404
+        return response
+
+
 @application.route('/add_cashier', methods=['POST'])
 def add_cashier():
     data = request.get_json()
@@ -1769,6 +1791,22 @@ def counterparties():
         ensure_ascii=False).encode('utf-8'),
                         content_type='application/json;charset=utf-8')
     return response, 200
+
+
+@application.route('/change_product_warehouse', methods=['POST'])
+def change_product_warehouse():
+    data = request.get_json()
+    access_token = data.get('access_token')
+    if check_token(access_token) is False:
+        return jsonify({'token': False}), 401
+    product_id = data.get('product_id')
+    warehouse = data.get('warehouse')
+    subwarehouse = data.get('subwarehouse')
+
+    products_collection.find_one_and_update({'_id': ObjectId(product_id)}, {'$set': {'warehouse': warehouse}})
+    products_collection.find_one_and_update({'_id': ObjectId(product_id)}, {'$set': {'subwarehouse': subwarehouse}})
+
+    return jsonify({'message': True})
 
 
 if __name__ == '__main__':
