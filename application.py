@@ -673,25 +673,33 @@ def add_order():
     source = data.get('source')
     payment = data.get('payment')
     comment = data.get('comment')
-    variations_id = data.get('products')
+    products = data.get('products')
     discount_sum = data.get('discount_sum', None)
     discount_per = data.get('discount_per', None)
 
-    products = []
-    for variation_id in variations_id:
-        variation = variations_collection.find_one({'_id': ObjectId(variation_id)})
-        document = {'_id': str(variation['_id']),
-                    'size': variation['size'],
-                    'colour': variation['colour'],
-                    'price': variation['price'],
-                    'in_stock': variation['in_stock'],
-                    'amount': 1,
-                    'photos': variation['photos'],
-                    'name': variation['name']}
-        products.append(document)
+    products_list = []
+    for product in products:
+        product_id = ObjectId(product['product_id'])
+        variation_id = product['variation_id']
+
+        # Query the products collection
+        product_document = products_collection.find_one(
+            {'_id': product_id, 'variations._id': variation_id},
+            {'variations.$': 1}
+        )
+
+        if product_document:
+            # Access the matched variation within the variations array
+            matched_variation = product_document['variations'][0]
+            product_name = products_collection.find_one({'_id': product_id})
+            matched_variation['name'] = product_name['name']
+            products_list.append(matched_variation)
+        else:
+            # If no product matched the variation
+            return jsonify({'message': 'No product matched the variation'}), 404
 
     total_sum = 0
-    for product in products:
+    for product in products_list:
         total_sum += product['price']
 
     if discount_sum:
@@ -712,7 +720,7 @@ def add_order():
                 'source': source,
                 'payment': payment,
                 'comment': comment,
-                'products': products,
+                'products': products_list,
                 'discount_sum': discount_sum,
                 'discount_per': discount_per,
                 'total_sum': total_sum}
