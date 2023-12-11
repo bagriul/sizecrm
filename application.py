@@ -1161,6 +1161,9 @@ def products():
     documents = list(products_collection.find(filter_criteria).skip(skip).limit(per_page))
     for document in documents:
         document['_id'] = str(document['_id'])
+    for document in documents:
+        for variation in document['variations']:
+            variation['name'] = document['name']
 
     # Calculate the range of clients being displayed
     start_range = skip + 1
