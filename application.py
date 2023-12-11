@@ -673,34 +673,13 @@ def add_order():
     source = data.get('source')
     payment = data.get('payment')
     comment = data.get('comment')
-    products = data.get('products')
+    variations = data.get('variations')
     discount_sum = data.get('discount_sum', None)
     discount_per = data.get('discount_per', None)
 
-    products_list = []
-    for product in products:
-        product_id = ObjectId(product['product_id'])
-        variation_id = product['variation_id']
-
-        # Query the products collection
-        product_document = products_collection.find_one(
-            {'_id': product_id, 'variations._id': variation_id},
-            {'variations.$': 1}
-        )
-
-        if product_document:
-            # Access the matched variation within the variations array
-            matched_variation = product_document['variations'][0]
-            product_name = products_collection.find_one({'_id': product_id})
-            matched_variation['name'] = product_name['name']
-            products_list.append(matched_variation)
-        else:
-            # If no product matched the variation
-            return jsonify({'message': 'No product matched the variation'}), 404
-
     total_sum = 0
-    for product in products_list:
-        total_sum += product['price']
+    for variation in variations:
+        total_sum += variation['price']
 
     if discount_sum:
         total_sum = total_sum - discount_sum
@@ -720,7 +699,7 @@ def add_order():
                 'source': source,
                 'payment': payment,
                 'comment': comment,
-                'products': products_list,
+                'variations': variations,
                 'discount_sum': discount_sum,
                 'discount_per': discount_per,
                 'total_sum': total_sum}
@@ -771,21 +750,15 @@ def update_order():
     order['payment'] = data.get('payment', order['payment'])
     order['comment'] = data.get('comment', order['comment'])
 
-    products = data.get('products')
-    if products:
-        new_products = []
-        for product in products:
-            document = variations_collection.find_one({'_id': ObjectId(product)})
-            new_products.append(document)
-        order['products'] = new_products
-    else:
-        order['products'] = []
+    variations = data.get('variations')
+    if variations:
+        order['variations'] = variations
     orders_collection.update_one({'_id': ObjectId(order_id)}, {'$set': order})
 
     order = orders_collection.find_one({'_id': ObjectId(order_id)})
     total_sum = 0
-    for product in order['products']:
-        total_sum += product['price']
+    for variation in order['variations']:
+        total_sum += variation['price']
     orders_collection.find_one_and_update(order, {'$set': {'total_sum': total_sum}})
     return jsonify({'message': True}), 200
 
