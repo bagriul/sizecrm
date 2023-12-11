@@ -679,7 +679,7 @@ def add_order():
 
     total_sum = 0
     for variation in variations:
-        total_sum += variation['price']
+        total_sum += variation['price'] * variation['amount']
 
     if discount_sum:
         total_sum = total_sum - discount_sum
@@ -758,7 +758,7 @@ def update_order():
     order = orders_collection.find_one({'_id': ObjectId(order_id)})
     total_sum = 0
     for variation in order['variations']:
-        total_sum += variation['price']
+        total_sum += variation['price'] * variation['amount']
     orders_collection.find_one_and_update(order, {'$set': {'total_sum': total_sum}})
     return jsonify({'message': True}), 200
 
