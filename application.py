@@ -16,6 +16,7 @@ import requests
 from io import BytesIO
 from uuid import uuid4
 from flask_bcrypt import Bcrypt
+import telebot
 
 application = Flask(__name__)
 CORS(application)
@@ -52,6 +53,7 @@ application.config['MAIL_DEFAULT_SENDER'] = 'size.crm@gmail.com'
 mail = Mail(application)
 
 bcrypt = Bcrypt(application)
+bot = telebot.TeleBot('')
 
 
 @application.route('/', methods=['GET'])
@@ -1791,6 +1793,175 @@ def change_product_warehouse():
     products_collection.find_one_and_update({'_id': ObjectId(product_id)}, {'$set': {'subwarehouse': subwarehouse}})
 
     return jsonify({'message': True})
+
+
+@application.route("/send_mail", methods=['POST'])
+def send_mail():
+    data = request.get_json()
+    access_token = data.get('access_token')
+    if check_token(access_token) is False:
+        return jsonify({'token': False}), 401
+    subject = data.get('subject')
+    recipients = data.get('recipients')
+    text = data.get('text')
+
+    for recipient in recipients:
+        msg = Message(subject=subject, sender='bagriul@gmail.com', recipients=[recipient])
+        msg.body = text
+        mail.send(msg)
+    return jsonify({'message': True}), 200
+
+
+@application.route('/new_mailing_list', methods=['POST'])
+def new_mailing_list():
+    data = request.get_json()
+    access_token = data.get('access_token')
+    if check_token(access_token) is False:
+        return jsonify({'token': False}), 401
+    min_price = data.get('min_price')
+    max_price = data.get('max_price')
+    min_total_price = data.get('min_total_price')
+    max_total_price = data.get('max_total_price')
+    category = data.get('category')
+
+    filter_criteria = {}
+    if category:
+        regex_pattern = f'.*{re.escape(category)}.*'
+        filter_criteria['price'] = {'$regex': regex_pattern, '$options': 'i'}
+
+    if min_price is not None and max_price is not None:
+        filter_criteria['variations'] = {
+            '$elemMatch': {
+                'price': {'$gte': min_price, '$lte': max_price}
+            }
+        }
+    elif min_price is not None:
+        filter_criteria['variations'] = {
+            '$elemMatch': {
+                'price': {'$gte': min_price}
+            }
+        }
+    elif max_price is not None:
+        filter_criteria['variations'] = {
+            '$elemMatch': {
+                'price': {'$lte': max_price}
+            }
+        }
+
+    if min_total_price is not None and max_total_price is not None:
+        filter_criteria['total_sum'] = {'$gte': min_price, '$lte': max_price}
+    elif min_total_price is not None:
+        filter_criteria['total_sum'] = {'$gte': min_price}
+    elif max_total_price is not None:
+        filter_criteria['total_sum'] = {'$lte': max_price}
+
+    documents = list(orders_collection.find(filter_criteria))
+    email_list = []
+    for document in documents:
+        client = clients_collection.find_one({'email': document['email']})
+        email = client['email']
+        if email not in email_list:
+            email_list.append(email)
+
+    return jsonify({'emails': email_list}), 200
+
+
+@application.route('/get_category', methods=['POST'])
+def get_category():
+    data = request.get_json()
+    access_token = data.get('access_token')
+    if check_token(access_token) is False:
+        return jsonify({'token': False}), 401
+    # Query to get all documents
+    documents = orders_collection.find()
+
+    # Extract unique categories from the documents
+    categories_set = set()
+    for document in documents:
+        variations = document.get('variations', [])
+        for variation in variations:
+            category = variation.get('category')
+            if category:
+                categories_set.add(category)
+
+    # Convert the set of categories to a list
+    categories_list = list(categories_set)
+    response = Response(json_util.dumps(
+        {'categories': categories_list},
+        ensure_ascii=False).encode('utf-8'),
+                        content_type='application/json;charset=utf-8')
+    return response, 200
+
+
+@application.route('/new_telegram_list', methods=['POST'])
+def new_telegram_list():
+    data = request.get_json()
+    access_token = data.get('access_token')
+    if check_token(access_token) is False:
+        return jsonify({'token': False}), 401
+    min_price = data.get('min_price')
+    max_price = data.get('max_price')
+    min_total_price = data.get('min_total_price')
+    max_total_price = data.get('max_total_price')
+    category = data.get('category')
+
+    filter_criteria = {}
+    if category:
+        regex_pattern = f'.*{re.escape(category)}.*'
+        filter_criteria['price'] = {'$regex': regex_pattern, '$options': 'i'}
+
+    if min_price is not None and max_price is not None:
+        filter_criteria['variations'] = {
+            '$elemMatch': {
+                'price': {'$gte': min_price, '$lte': max_price}
+            }
+        }
+    elif min_price is not None:
+        filter_criteria['variations'] = {
+            '$elemMatch': {
+                'price': {'$gte': min_price}
+            }
+        }
+    elif max_price is not None:
+        filter_criteria['variations'] = {
+            '$elemMatch': {
+                'price': {'$lte': max_price}
+            }
+        }
+
+    if min_total_price is not None and max_total_price is not None:
+        filter_criteria['total_sum'] = {'$gte': min_price, '$lte': max_price}
+    elif min_total_price is not None:
+        filter_criteria['total_sum'] = {'$gte': min_price}
+    elif max_total_price is not None:
+        filter_criteria['total_sum'] = {'$lte': max_price}
+
+    documents = list(orders_collection.find(filter_criteria))
+    tgID_list = []
+    for document in documents:
+        client = clients_collection.find_one({'email': document['email']})
+        tgID = client['tgID']
+        if tgID not in tgID_list:
+            tgID_list.append(tgID)
+
+    return jsonify({'tgIDs': tgID_list}), 200
+
+
+@application.route("/send_telegram", methods=['POST'])
+def send_telegram():
+    data = request.get_json()
+    access_token = data.get('access_token')
+    if check_token(access_token) is False:
+        return jsonify({'token': False}), 401
+    recipients = data.get('recipients')
+    text = data.get('text')
+
+    for recipient in recipients:
+        try:
+            bot.send_message(recipient, text)
+        except Exception as e:
+            print(e)
+    return jsonify({'message': True}), 200
 
 
 if __name__ == '__main__':
