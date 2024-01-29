@@ -1709,13 +1709,16 @@ def cashiers():
             elif transaction['type'] == 'З рахунку':
                 expenses += transaction['sum']
         balance = incomes - expenses
-        cashiers_collection.find_one_and_update({'name': transaction['cashier']}, {
-            '$set': {
-                'incomes': incomes,
-                'expenses': expenses,
-                'balance': balance
-            }
-        })
+        try:
+            cashiers_collection.find_one_and_update({'name': transaction['cashier']}, {
+                '$set': {
+                    'incomes': incomes,
+                    'expenses': expenses,
+                    'balance': balance
+                }
+            })
+        except UnboundLocalError:
+            pass
     documents = list(cashiers_collection.find(filter_criteria).skip(skip).limit(per_page))
     for document in documents:
         document['_id'] = str(document['_id'])
