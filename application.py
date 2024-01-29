@@ -1,5 +1,4 @@
 from flask import Flask, request, jsonify, Response
-from flask_jwt_extended import jwt_required, get_jwt_identity
 import jwt
 from pymongo import MongoClient, ASCENDING, DESCENDING
 from bson import json_util, ObjectId
