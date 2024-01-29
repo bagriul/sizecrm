@@ -345,7 +345,7 @@ def add_client():
         'user_id': user_id
     }
 
-    is_present = clients_collection.find_one({'phone': phone})
+    is_present = clients_collection.find_one({'email': email, 'user_id': user_id})
     if is_present is None:
         clients_collection.insert_one(document)
         response = jsonify({'message': 'Client created successfully'}), 200
@@ -1756,7 +1756,7 @@ def add_counterpartie():
     is_present = counterparties_collection.find_one({'name': name,
                                                      'user_id': user_id})
     if is_present is None:
-        counterparties_collection.insert_one({'name': name})
+        counterparties_collection.insert_one({'name': name, 'user_id': user_id})
         return jsonify({'message': True}), 200
     else:
         return jsonify({'message': False}), 409
