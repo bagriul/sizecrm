@@ -226,7 +226,8 @@ def register():
         'email': email,
         'password': hashed_password,
         'password2': hashed_password,
-        'userpic': default_userpic
+        'userpic': default_userpic,
+        'role': 'all'
     }
 
     is_present = users_collection.find_one({'email': email})
