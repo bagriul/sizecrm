@@ -527,7 +527,7 @@ def new_status():
     type = data.get('type')
     is_present = statuses_collection.find_one({'status': status, 'type': type, 'user_id': user_id})
     if is_present is None:
-        statuses_collection.insert_one({'status': status, 'colour': colour, 'type': type})
+        statuses_collection.insert_one({'status': status, 'colour': colour, 'type': type, 'user_id': user_id})
         return jsonify({'message': 'Created successfully'}), 200
     else:
         return jsonify({'message': 'Status already exists'}), 409
