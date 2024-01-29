@@ -96,7 +96,8 @@ def verify_access_token(access_token):
             if user:
                 name = user['name']
                 userpic = user['userpic']
-                return jsonify({'name': name, 'userpic': userpic}), 200
+                role = user['role']
+                return jsonify({'name': name, 'userpic': userpic, 'role': role}), 200
             # User is authenticated, proceed with processing the request
             else:
                 return jsonify({'message': 'User not found'}), 404
