@@ -1795,21 +1795,30 @@ def change_product_warehouse():
     return jsonify({'message': True})
 
 
-@application.route("/send_mail", methods=['POST'])
-def send_mail():
+@application.route("/send_mailing", methods=['POST'])
+def send_mailing():
     data = request.get_json()
     access_token = data.get('access_token')
     if check_token(access_token) is False:
         return jsonify({'token': False}), 401
+    type = data.get('type')
     subject = data.get('subject')
     recipients = data.get('recipients')
     text = data.get('text')
 
-    for recipient in recipients:
-        msg = Message(subject=subject, sender='bagriul@gmail.com', recipients=[recipient])
-        msg.body = text
-        mail.send(msg)
-    return jsonify({'message': True}), 200
+    if type == 'mail':
+        for recipient in recipients:
+            msg = Message(subject=subject, sender='bagriul@gmail.com', recipients=[recipient])
+            msg.body = text
+            mail.send(msg)
+        return jsonify({'message': True}), 200
+    elif type == 'telegram':
+        for recipient in recipients:
+            try:
+                bot.send_message(recipient, text)
+            except Exception as e:
+                print(e)
+        return jsonify({'message': True}), 200
 
 
 @application.route('/new_mailing_list', methods=['POST'])
@@ -1947,21 +1956,18 @@ def new_telegram_list():
     return jsonify({'tgIDs': tgID_list}), 200
 
 
-@application.route("/send_telegram", methods=['POST'])
-def send_telegram():
+@application.route('/analytics', methods=['POST'])
+def analytics():
     data = request.get_json()
     access_token = data.get('access_token')
     if check_token(access_token) is False:
         return jsonify({'token': False}), 401
-    recipients = data.get('recipients')
-    text = data.get('text')
+    type = data.get('type')
 
-    for recipient in recipients:
-        try:
-            bot.send_message(recipient, text)
-        except Exception as e:
-            print(e)
-    return jsonify({'message': True}), 200
+    if type == 'total_sales':
+        start_date = data.get('start_date')
+        end_date = data.get('end_date')
+    return 200
 
 
 if __name__ == '__main__':
