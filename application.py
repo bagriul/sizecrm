@@ -1871,8 +1871,7 @@ def new_mailing_list():
 
     filter_criteria = {'user_id': user_id}
     if category:
-        regex_pattern = f'.*{re.escape(category)}.*'
-        filter_criteria['price'] = {'$regex': regex_pattern, '$options': 'i'}
+        filter_criteria['variations'] = {'$elemMatch': {'category': category}}
 
     if min_price is not None and max_price is not None:
         filter_criteria['variations'] = {
@@ -1956,8 +1955,7 @@ def new_telegram_list():
 
     filter_criteria = {'user_id': user_id}
     if category:
-        regex_pattern = f'.*{re.escape(category)}.*'
-        filter_criteria['price'] = {'$regex': regex_pattern, '$options': 'i'}
+        filter_criteria['variations'] = {'$elemMatch': {'category': category}}
 
     if min_price is not None and max_price is not None:
         filter_criteria['variations'] = {
