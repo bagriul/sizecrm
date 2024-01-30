@@ -1698,27 +1698,41 @@ def cashiers():
 
     # Paginate the query results using skip and limit, and apply filters
     skip = (page - 1) * per_page
-    documents = list(cashiers_collection.find(filter_criteria).skip(skip).limit(per_page))
-    for document in documents:
-        incomes = 0
-        expenses = 0
-        transactions = transactions_collection.find()
-        for transaction in transactions:
-            if transaction['type'] == 'На рахунок':
-                incomes += transaction['sum']
-            elif transaction['type'] == 'З рахунку':
-                expenses += transaction['sum']
-        balance = incomes - expenses
-        try:
-            cashiers_collection.find_one_and_update({'name': transaction['cashier']}, {
-                '$set': {
-                    'incomes': incomes,
-                    'expenses': expenses,
-                    'balance': balance
-                }
-            })
-        except UnboundLocalError:
-            pass
+    #documents = list(cashiers_collection.find(filter_criteria).skip(skip).limit(per_page))
+
+    transactions = list(transactions_collection.find({'user_id': user_id}))
+    cashiers = list(cashiers_collection.find({'user_id': user_id}))
+
+    # Initialize dictionaries to store incomes, expenses, and balances for each cashier
+    cashier_incomes = {}
+    cashier_expenses = {}
+    cashier_balances = {}
+
+    for cashier in cashiers:
+        cashier_name = cashier['name']
+        cashier_incomes[cashier_name] = 0
+        cashier_expenses[cashier_name] = 0
+        cashier_balances[cashier_name] = 0
+
+    for transaction in transactions:
+        cashier_name = transaction['cashier']
+
+        if transaction['type'] == 'На рахунок':
+            cashier_incomes[cashier_name] += transaction['sum']
+        elif transaction['type'] == 'З рахунку':
+            cashier_expenses[cashier_name] += transaction['sum']
+
+    # Update cashiers_collection for each cashier
+    for cashier_name in cashier_incomes.keys():
+        balance = cashier_incomes[cashier_name] - cashier_expenses[cashier_name]
+        cashiers_collection.find_one_and_update({'name': cashier_name, 'user_id': user_id}, {
+            '$set': {
+                'incomes': cashier_incomes[cashier_name],
+                'expenses': cashier_expenses[cashier_name],
+                'balance': balance
+            }
+        })
+
     documents = list(cashiers_collection.find(filter_criteria).skip(skip).limit(per_page))
     for document in documents:
         document['_id'] = str(document['_id'])
