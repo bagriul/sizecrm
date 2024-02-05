@@ -37,6 +37,7 @@ cashiers_collection = db['cashiers']
 counterparties_collection = db['counterparties']
 auto_transactions_collection = db['auto_transactions']
 demo_users_collection = db['demo_users']
+mailing_history_collection = db['mailing_history']
 
 google_bp = make_google_blueprint(client_id='YOUR_GOOGLE_CLIENT_ID',
                                   client_secret='YOUR_GOOGLE_CLIENT_SECRET',
@@ -649,6 +650,7 @@ def orders():
     documents = list(orders_collection.find(filter_criteria).skip(skip).limit(per_page))
     for document in documents:
         document['_id'] = str(document['_id'])
+        document['date'] = document['date'].strftime("%a %b %d %Y")
     sort_by = data.get('sort_by')
     if sort_by:
         reverse_sort = data.get('reverse_sort', False)
@@ -697,14 +699,15 @@ def add_order():
     if discount_per:
         total_sum = total_sum - (total_sum * discount_per / 100)
 
+    client = clients_collection.find_one({'email': email})
+
     # Get today's date
     today = datetime.today()
-    # Format the date
-    formatted_date = today.strftime("%a %b %d %Y")
 
-    document = {'date': formatted_date,
+    document = {'date': today,
                 'client': client,
                 'email': email,
+                'gender': client['gender'],
                 'shipping': shipping,
                 'status': status_doc,
                 'source': source,
@@ -859,6 +862,7 @@ def order_info():
     if order_document:
         # Convert ObjectId to string before returning the response
         order_document['_id'] = str(order_document['_id'])
+        order_document['date'] = order_document['date'].strftime("%a %b %d %Y")
 
         # Use dumps() to handle ObjectId serialization
         return json.dumps(order_document, default=str), 200, {'Content-Type': 'application/json'}
@@ -1850,23 +1854,46 @@ def send_mailing():
     access_token = data.get('access_token')
     if check_token(access_token) is False:
         return jsonify({'token': False}), 401
+    user_id = decode_access_token(access_token, SECRET_KEY).get('user_id')
     type = data.get('type')
     subject = data.get('subject')
     recipients = data.get('recipients')
     text = data.get('text')
 
+    today = datetime.today()
     if type == 'mail':
+        recipients_names = []
         for recipient in recipients:
             msg = Message(subject=subject, sender='bagriul@gmail.com', recipients=[recipient])
             msg.body = text
-            mail.send(msg)
+            #mail.send(msg)
+            client = clients_collection.find_one({'email': recipient})
+            recipients_names.append({'client_name': client['name'], 'client_id': str(client['_id'])})
+        document = {'date': today,
+                    'subject': subject,
+                    'text': text,
+                    'amount': len(recipients),
+                    'recipients': recipients_names,
+                    'type': 'mail',
+                    'user_id': user_id,}
+        mailing_history_collection.insert_one(document)
         return jsonify({'message': True}), 200
     elif type == 'telegram':
+        recipients_names = []
         for recipient in recipients:
             try:
-                bot.send_message(recipient, text)
+                #bot.send_message(recipient, text)
+                client = clients_collection.find_one({'tgID': recipient})
+                recipients_names.append({'client_name': client['name'], 'client_id': str(client['_id'])})
             except Exception as e:
                 print(e)
+        document = {'date': today,
+                    'text': text,
+                    'amount': len(recipients),
+                    'recipients': recipients_names,
+                    'type': 'telegram',
+                    'user_id': user_id}
+        mailing_history_collection.insert_one(document)
         return jsonify({'message': True}), 200
 
 
@@ -2015,12 +2042,54 @@ def analytics():
     if check_token(access_token) is False:
         return jsonify({'token': False}), 401
     user_id = decode_access_token(access_token, SECRET_KEY).get('user_id')
-    type = data.get('type')
+    start_date = datetime.strptime(data.get('start_date'), "%a %b %d %Y")
+    end_date = datetime.strptime(data.get('end_date'), "%a %b %d %Y") + timedelta(days=1)
 
-    if type == 'total_sales':
-        start_date = data.get('start_date')
-        end_date = data.get('end_date')
-    return 200
+    filter_criteria_total_sales = {'user_id': user_id}
+    if start_date and end_date:
+        filter_criteria_total_sales['date'] = {"$gte": start_date, "$lt": end_date}
+    documents = list(orders_collection.find(filter_criteria_total_sales))
+    total_sales = 0
+    daily_sales = {}
+    for document in documents:
+        total_sales += document['total_sum']
+        # Extract the date from the document and round it to the day
+        sale_date = document['date'].replace(hour=0, minute=0, second=0, microsecond=0)
+        sale_date_str = str(sale_date.date())
+        daily_sales[sale_date_str] = daily_sales.get(sale_date_str, 0) + document['total_sum']
+
+    avarage_check = total_sales // len(documents)
+
+    purchase_frequency_client = data.get('purchase_frequency_client')
+    filter_criteria_purchase_frequency = {'user_id': user_id}
+    if purchase_frequency_client:
+        regex_pattern = f'.*{re.escape(purchase_frequency_client)}.*'
+        filter_criteria_purchase_frequency['email'] = {'$regex': regex_pattern, '$options': 'i'}
+        filter_criteria_purchase_frequency['date'] = {"$gte": start_date, "$lt": end_date}
+    documents = list(orders_collection.find(filter_criteria_purchase_frequency))
+    purchase_frequency = len(documents)
+
+    purchase_segmentation_gender = data.get('purchase_segmentation_gender')
+    purchase_segmentation_category = data.get('purchase_segmentation_category')
+    filter_criteria_purchase_segmentation = {'user_id': user_id}
+    if purchase_segmentation_gender:
+        regex_pattern = f'.*{re.escape(purchase_segmentation_gender)}.*'
+        filter_criteria_purchase_segmentation['gender'] = {'$regex': regex_pattern, '$options': 'i'}
+    if purchase_segmentation_category:
+        filter_criteria_purchase_segmentation['variations'] = {'$elemMatch': {'category': purchase_segmentation_category}}
+    documents = list(orders_collection.find(filter_criteria_purchase_segmentation))
+    purchase_segmentation_amount = len(documents)
+    purchase_segmentation_sum = 0
+    for document in documents:
+        purchase_segmentation_sum += document['total_sum']
+
+    mailing_history = list(mailing_history_collection.find({'user_id': user_id}))
+    for document in mailing_history:
+        document['_id'] = str(document['_id'])
+
+    return jsonify({'total_sales': total_sales, 'daily_sales': daily_sales, 'avarage_check': avarage_check,
+                    "purchase_frequency": purchase_frequency, 'purchase_segmentation_amount': purchase_segmentation_amount,
+                    'purchase_segmentation_sum': purchase_segmentation_sum, 'mailing_history': mailing_history}), 200
 
 
 if __name__ == '__main__':
