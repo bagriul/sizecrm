@@ -297,7 +297,7 @@ def forgot_password():
         msg.body = f"Перейдіть за цим посиланням для відновлення паролю: http://127.0.0.1:5000/reset_password?token={token}"
         mail.send(msg)
 
-        return jsonify({'message': True}), 200
+        return jsonify({'message': True, 'token': token}), 200
     else:
         return jsonify({'message': False}), 404
 
