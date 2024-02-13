@@ -2165,59 +2165,175 @@ def new_telegram_list():
 
 @application.route('/analytics', methods=['POST'])
 def analytics():
-    data = request.get_json()
+    data = request.get_json() or {}
     access_token = data.get('access_token')
-    if check_token(access_token) is False:
-        return jsonify({'token': False}), 401
-    user_id = decode_access_token(access_token, SECRET_KEY).get('user_id')
-    start_date = datetime.strptime(data.get('start_date'), "%a %b %d %Y")
-    end_date = datetime.strptime(data.get('end_date'), "%a %b %d %Y") + timedelta(days=1)
 
-    filter_criteria_total_sales = {'user_id': user_id}
-    if start_date and end_date:
-        filter_criteria_total_sales['date'] = {"$gte": start_date, "$lt": end_date}
-    documents = list(orders_collection.find(filter_criteria_total_sales))
-    total_sales = 0
-    daily_sales = {}
-    for document in documents:
-        total_sales += document['total_sum']
-        # Extract the date from the document and round it to the day
-        sale_date = document['date'].replace(hour=0, minute=0, second=0, microsecond=0)
-        sale_date_str = str(sale_date.date())
-        daily_sales[sale_date_str] = daily_sales.get(sale_date_str, 0) + document['total_sum']
+    if not check_token(access_token):
+        return jsonify({'error': 'Invalid token'}), 401
 
-    avarage_check = total_sales // len(documents)
+    try:
+        user_id = decode_access_token(access_token, SECRET_KEY).get('user_id')
+        start_date = datetime.strptime(data.get('start_date'), "%a %b %d %Y")
+        end_date = datetime.strptime(data.get('end_date'), "%a %b %d %Y") + timedelta(days=1)
+    except (TypeError, ValueError) as e:
+        return jsonify({'error': 'Invalid date format'}), 400
 
-    purchase_frequency_client = data.get('purchase_frequency_client')
-    filter_criteria_purchase_frequency = {'user_id': user_id}
-    if purchase_frequency_client:
-        regex_pattern = f'.*{re.escape(purchase_frequency_client)}.*'
-        filter_criteria_purchase_frequency['email'] = {'$regex': regex_pattern, '$options': 'i'}
-        filter_criteria_purchase_frequency['date'] = {"$gte": start_date, "$lt": end_date}
-    documents = list(orders_collection.find(filter_criteria_purchase_frequency))
-    purchase_frequency = len(documents)
+    sales_info = calculate_sales_info(user_id, start_date, end_date)
+    returns_info = calculate_returns_info(user_id, start_date, end_date)
+    top_products = calculate_top_products(user_id, start_date, end_date, data.get('product_category'))
+    purchase_segmentation = calculate_purchase_segmentation(data, user_id)
+    mailing_history = get_mailing_history(data, user_id)
 
-    purchase_segmentation_gender = data.get('purchase_segmentation_gender')
-    purchase_segmentation_category = data.get('purchase_segmentation_category')
-    filter_criteria_purchase_segmentation = {'user_id': user_id}
-    if purchase_segmentation_gender:
-        regex_pattern = f'.*{re.escape(purchase_segmentation_gender)}.*'
-        filter_criteria_purchase_segmentation['gender'] = {'$regex': regex_pattern, '$options': 'i'}
-    if purchase_segmentation_category:
-        filter_criteria_purchase_segmentation['variations'] = {'$elemMatch': {'category': purchase_segmentation_category}}
-    documents = list(orders_collection.find(filter_criteria_purchase_segmentation))
-    purchase_segmentation_amount = len(documents)
-    purchase_segmentation_sum = 0
-    for document in documents:
-        purchase_segmentation_sum += document['total_sum']
+    response_data = {
+        **sales_info,
+        **returns_info,
+        'top_products': top_products,
+        **purchase_segmentation,
+        'mailing_history': mailing_history
+    }
 
-    mailing_history = list(mailing_history_collection.find({'user_id': user_id}))
-    for document in mailing_history:
-        document['_id'] = str(document['_id'])
+    return jsonify(response_data), 200
 
-    return jsonify({'total_sales': total_sales, 'daily_sales': daily_sales, 'avarage_check': avarage_check,
-                    "purchase_frequency": purchase_frequency, 'purchase_segmentation_amount': purchase_segmentation_amount,
-                    'purchase_segmentation_sum': purchase_segmentation_sum, 'mailing_history': mailing_history}), 200
+
+def calculate_sales_or_returns_info(user_id, start_date, end_date, status):
+    filter_criteria = {
+        'user_id': user_id,
+        'date': {"$gte": start_date, "$lt": end_date},
+        'status.status': status
+    }
+    documents = list(orders_collection.find(filter_criteria))
+    total_sum = sum(doc['total_sum'] for doc in documents)
+    document_count = len(documents)
+    average_check = total_sum / document_count if document_count else 0
+    daily_info = {}
+
+    for doc in documents:
+        date_key = doc['date'].strftime('%Y-%m-%d')
+        if date_key not in daily_info:
+            daily_info[date_key] = {'total_sum': 0, 'count': 0}
+        daily_info[date_key]['total_sum'] += doc['total_sum']
+        daily_info[date_key]['count'] += 1
+
+    if status == 'Оплачено':
+        result_key_prefix = 'sales'
+    else:  # Assume 'Повернено' for returns
+        result_key_prefix = 'returns'
+
+    return {
+        f'{result_key_prefix}_total_sum': total_sum,
+        f'{result_key_prefix}_average_check': average_check,
+        f'{result_key_prefix}_amount': document_count,
+        f'daily_{result_key_prefix}_info': daily_info
+    }
+
+
+def calculate_sales_info(user_id, start_date, end_date):
+    return calculate_sales_or_returns_info(user_id, start_date, end_date, 'Оплачено')
+
+
+def calculate_returns_info(user_id, start_date, end_date):
+    return calculate_sales_or_returns_info(user_id, start_date, end_date, 'Повернено')
+
+
+def calculate_top_products(user_id, start_date, end_date, category=None):
+    # Match stage to filter orders by user_id, date, and optionally by category within variations
+    match_stage = {
+        '$match': {
+            'user_id': user_id,
+            'date': {'$gte': start_date, '$lt': end_date},
+            'status.status': 'Оплачено',  # Assuming you want to filter by paid orders
+        }
+    }
+
+    # Unwind the variations array to treat each product as a separate document
+    unwind_stage = {
+        '$unwind': '$variations'
+    }
+
+    # Optional category match stage if a category is provided
+    if category:
+        category_match_stage = {
+            '$match': {
+                'variations.category': category
+            }
+        }
+    else:
+        category_match_stage = {}
+
+    # Group stage to aggregate products, count their occurrences, and sum the amounts
+    group_stage = {
+        '$group': {
+            '_id': {
+                'product_name': '$variations.name',
+                'product_category': '$variations.category',
+            },
+            'count': {'$sum': 1},
+            'total_amount': {'$sum': '$variations.amount'}  # Sum the total amount sold for each product
+        }
+    }
+
+    # Sort stage to order the results by count and total_amount (if you want to prioritize higher sales volume)
+    sort_stage = {
+        '$sort': {'count': -1, 'total_amount': -1}
+    }
+
+    # Limit stage to get the top 5 products
+    limit_stage = {
+        '$limit': 5
+    }
+
+    # Building the pipeline conditionally based on whether a category filter is applied
+    pipeline = [match_stage, unwind_stage]
+    if category:
+        pipeline.append(category_match_stage)
+    pipeline.extend([group_stage, sort_stage, limit_stage])
+
+    # Execute the aggregation pipeline
+    top_products = list(orders_collection.aggregate(pipeline))
+
+    # Format results for readability
+    formatted_results = [{
+        'product_name': product['_id']['product_name'],
+        'product_category': product['_id']['product_category'],
+        'sold_count': product['count'],
+        'total_amount': product['total_amount']
+    } for product in top_products]
+
+    return formatted_results
+
+
+def calculate_purchase_segmentation(data, user_id):
+    filter_criteria = {'user_id': user_id}
+    for field in ['gender', 'variations.category']:
+        key = f'purchase_segmentation_{field.split(".")[-1]}' # Adjust key to match input data
+        value = data.get(key)
+        if value:
+            if 'gender' in field:
+                filter_criteria['gender'] = {'$regex': f'.*{re.escape(value)}.*', '$options': 'i'}
+            else:  # Handle category within variations
+                filter_criteria['variations'] = {'$elemMatch': {'category': value}}
+
+    documents = list(orders_collection.find(filter_criteria))
+    purchase_segmentation_sum = sum(doc['total_sum'] for doc in documents)
+
+    return {
+        'purchase_segmentation_amount': len(documents),
+        'purchase_segmentation_sum': purchase_segmentation_sum
+    }
+
+
+def get_mailing_history(data, user_id):
+    mailing_type = data.get('mailing_type')
+    filter_criteria = {'user_id': user_id}
+    if mailing_type:
+        filter_criteria['type'] = {'$regex': f'.*{re.escape(mailing_type)}.*', '$options': 'i'}
+
+    documents = list(mailing_history_collection.find(filter_criteria))
+    # Convert ObjectIds to strings for JSON serialization
+    for doc in documents:
+        doc['_id'] = str(doc['_id'])
+
+    return documents
 
 
 if __name__ == '__main__':
