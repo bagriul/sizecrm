@@ -297,7 +297,7 @@ def forgot_password():
         msg.body = f"Перейдіть за цим посиланням для відновлення паролю: http://127.0.0.1:5000/reset_password?token={token}"
         mail.send(msg)
 
-        return jsonify({'message': True, 'token': token}), 200
+        return jsonify({'message': True}), 200
     else:
         return jsonify({'message': False}), 404
 
@@ -313,6 +313,18 @@ def reset_password():
         hashed_password = bcrypt.generate_password_hash(new_password).decode('utf-8')
         users_collection.update_one({'reset_token': token}, {'$set': {'password': hashed_password, 'reset_token': None}})
 
+        return jsonify({'message': True}), 200
+    else:
+        return jsonify({'message': False}), 400
+
+
+@application.route('/check_reset_token', methods=['POST'])
+def check_reset_token():
+    data = request.get_json()
+    token = data.get('reset_token')
+
+    user = users_collection.find_one({'reset_token': token})
+    if user:
         return jsonify({'message': True}), 200
     else:
         return jsonify({'message': False}), 400
