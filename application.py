@@ -390,18 +390,23 @@ def clients():
         latest_order_date = None
         for order in client_orders:
             try:
-                total_price_sum += order['total_price']
-            except:
-                pass
-            if latest_order_date is None or order['order_date'] > latest_order_date:
+                total_price_sum += order['total_sum']
+            except Exception as e:
+                print(e)
+            if latest_order_date is None or order['date'] > latest_order_date:
                 try:
-                    latest_order_date = order['order_date']
-                except:
-                    pass
+                    latest_order_date = order['date']
+                except Exception as e:
+                    print(e)
         client['total_price_sum'] = total_price_sum
         client['latest_order_date'] = latest_order_date
         client['_id'] = str(client['_id'])
         response_clients.append(client)
+
+    sort_by = data.get('sort_by')
+    if sort_by:
+        reverse_sort = data.get('reverse_sort', False)
+        response_clients = sorted(response_clients, key=lambda x: x.get(sort_by, 0), reverse=reverse_sort)
 
     # Calculate the range of clients being displayed
     start_range = skip + 1
@@ -1004,6 +1009,11 @@ def tasks():
     documents = list(tasks_collection.find(filter_criteria).skip(skip).limit(per_page))
     for document in documents:
         document['_id'] = str(document['_id'])
+
+    sort_by = data.get('sort_by')
+    if sort_by:
+        reverse_sort = data.get('reverse_sort', False)
+        documents = sorted(documents, key=lambda x: x.get(sort_by, 0), reverse=reverse_sort)
 
     # Calculate the range of clients being displayed
     start_range = skip + 1
