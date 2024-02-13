@@ -182,9 +182,6 @@ def login():
     if user:
         hashed_password_in_db = user.get('password', '')  # Assuming the field name is 'password'
 
-        # Print or log the hashed password in the database for debugging
-        #print(f"Hashed Password in DB: {hashed_password_in_db}")
-
         if bcrypt.check_password_hash(hashed_password_in_db, password):
             user_id = str(user['_id'])  # Assuming user ID is stored as ObjectId in MongoDB
 
@@ -198,10 +195,6 @@ def login():
 
             response = jsonify({'access_token': access_token, 'refresh_token': refresh_token}), 200
             return response
-
-    # Print or log the hashed password generated during login for debugging
-    hashed_password_for_login = bcrypt.generate_password_hash(password).decode('utf-8')
-    #print(f"Hashed Password for Login: {hashed_password_for_login}")
 
     response = jsonify({'message': 'Invalid credentials'}), 401
     return response
@@ -345,33 +338,36 @@ def send_welcome_email(email):
 # Endpoint to add new client
 @application.route('/add_client', methods=['POST'])
 def add_client():
-    data = request.form.to_dict()  # Get form data including image
+    # Get form data including image
+    data = request.form.to_dict()
     userpic = request.files.get('userpic')
 
+    # Check access token
     access_token = data.get('access_token')
-    if check_token(access_token) is False:
+    if not check_token(access_token):
         return jsonify({'token': False}), 401
+
     user_id = decode_access_token(access_token, SECRET_KEY).get('user_id')
-    name = data.get('name', None)
-    phone = data.get('phone', None)
-    additional_phone = data.get('additional_phone', None)
-    email = data.get('email', None)
-    gender = data.get('gender', None)
-    birthday = data.get('birthday', None)
-    instagram = data.get('instagram', None)
-    telegram = data.get('telegram', None)
-    comment = data.get('comment', None)
-    status = data.get('status', None)
-    status_doc = statuses_collection.find_one({'status': status})
-    if status_doc:
-        del status_doc['_id']
+
+    # Extract data from form
+    name = data.get('name')
+    phone = data.get('phone')
+    additional_phone = data.get('additional_phone')
+    email = data.get('email')
+    gender = data.get('gender')
+    birthday = data.get('birthday')
+    instagram = data.get('instagram')
+    telegram = data.get('telegram')
+    comment = data.get('comment')
+    status = data.get('status')
+
+    # Fetch status document from collection
+    status_doc = statuses_collection.find_one({'status': status}, {'_id': 0}) if status else None
 
     # Process image file
-    if userpic:
-        userpic = base64.b64encode(userpic.read()).decode('utf-8')
-    else:
-        userpic = None
+    userpic = base64.b64encode(userpic.read()).decode('utf-8') if userpic else None
 
+    # Construct document
     document = {
         'name': name,
         'phone': phone,
@@ -383,32 +379,44 @@ def add_client():
         'telegram': telegram,
         'comment': comment,
         'status': status_doc,
-        'userpic': userpic, # Store the image data as base64 string
+        'userpic': userpic,
         'user_id': user_id
     }
 
+    # Check if client already exists
     is_present = clients_collection.find_one({'email': email, 'user_id': user_id})
-    if is_present is None:
-        clients_collection.insert_one(document)
-        response = jsonify({'message': 'Client created successfully'}), 200
-        return response
-    else:
-        response = jsonify({'message': 'Client already exists'}), 409
-        return response
+    if is_present:
+        return jsonify({'message': 'Client already exists'}), 409
+
+    # Insert new client document
+    clients_collection.insert_one(document)
+
+    # Return response
+    return jsonify({'message': 'Client created successfully'}), 200
 
 
 # Endpoint to get clients list
 @application.route('/clients', methods=['POST'])
 def clients():
+    # Get data from request
     data = request.get_json()
+
+    # Get access token from data
     access_token = data.get('access_token')
-    if check_token(access_token) is False:
+
+    # Check access token
+    if not check_token(access_token):
         return jsonify({'token': False}), 401
+
+    # Decode user_id from access token
     user_id = decode_access_token(access_token, SECRET_KEY).get('user_id')
+
+    # Get keyword, page, and per_page from data
     keyword = data.get('keyword')
     page = data.get('page', 1)  # Default to page 1 if not provided
     per_page = data.get('per_page', 10)  # Default to 10 items per page if not provided
 
+    # Define filter criteria based on user_id and keyword
     filter_criteria = {'user_id': user_id}
     if keyword:
         regex_pattern = f'.*{re.escape(keyword)}.*'
@@ -417,42 +425,34 @@ def clients():
     # Count the total number of clients that match the filter criteria
     total_clients = clients_collection.count_documents(filter_criteria)
 
+    # Calculate total pages
     total_pages = math.ceil(total_clients / per_page)
 
     # Paginate the query results using skip and limit, and apply filters
     skip = (page - 1) * per_page
     clients = list(clients_collection.find(filter_criteria).skip(skip).limit(per_page))
 
+    # Prepare response clients with additional information
     response_clients = []
     for client in clients:
         client_orders = list(orders_collection.find({'email': client['email']}))
         client['orders'] = client_orders
-        total_price_sum = 0
-        latest_order_date = None
-        for order in client_orders:
-            try:
-                total_price_sum += order['total_sum']
-            except Exception as e:
-                print(e)
-            if latest_order_date is None or order['date'] > latest_order_date:
-                try:
-                    latest_order_date = order['date']
-                except Exception as e:
-                    print(e)
-        client['total_price_sum'] = total_price_sum
-        client['latest_order_date'] = latest_order_date
+        total_price_sum = sum(order.get('total_sum', 0) for order in client_orders)
+        latest_order_date = max((order.get('date', datetime.min) for order in client_orders), default=None)
         client['_id'] = str(client['_id'])
         client['orders_amount'] = len(client_orders)
+        client['total_price_sum'] = total_price_sum
+        client['latest_order_date'] = latest_order_date
         response_clients.append(client)
 
+    # Sort response clients based on sort_by and reverse_sort parameters
     sort_by = data.get('sort_by')
     if sort_by:
         reverse_sort = data.get('reverse_sort', False)
-        if sort_by == 'latest_order_date':
-            default_order_date = datetime.min
-            response_clients = sorted(response_clients, key=lambda x: x.get(sort_by, default_order_date) or default_order_date, reverse=reverse_sort)
-        elif sort_by == 'status':
-            response_clients = sorted(response_clients, key=lambda x: x.get("status", {}).get("status", ""), reverse=reverse_sort)
+        if sort_by in ('latest_order_date', 'status'):
+            response_clients = sorted(response_clients, key=lambda x: x.get(
+                sort_by) or datetime.min if sort_by == 'latest_order_date' else x.get('status', {}).get('status', ''),
+                                      reverse=reverse_sort)
         else:
             response_clients = sorted(response_clients, key=lambda x: x.get(sort_by, 0), reverse=reverse_sort)
 
@@ -461,29 +461,45 @@ def clients():
     end_range = min(skip + per_page, total_clients)
 
     # Serialize the response clients using json_util from pymongo and specify encoding
-    response = Response(json_util.dumps(
-        {'clients': response_clients, 'total_clients': total_clients, 'start_range': start_range, 'end_range': end_range,
-         'total_pages': total_pages},
-        ensure_ascii=False).encode('utf-8'),
-                        content_type='application/json;charset=utf-8')
+    response = Response(
+        json_util.dumps({
+            'clients': response_clients,
+            'total_clients': total_clients,
+            'start_range': start_range,
+            'end_range': end_range,
+            'total_pages': total_pages
+        }, ensure_ascii=False).encode('utf-8'),
+        content_type='application/json;charset=utf-8'
+    )
+
     return response, 200
 
 
 # Endpoint to delete client
 @application.route('/delete_client', methods=['POST'])
 def delete_client():
+    # Get data from request
     data = request.get_json()
+
+    # Extract client_id and access_token from data
     client_id = data.get('client_id')
     access_token = data.get('access_token')
-    if check_token(access_token) is False:
+
+    # Check access token
+    if not check_token(access_token):
         return jsonify({'token': False}), 401
 
-    # Convert the client_id to ObjectId type
-    client_object_id = ObjectId(client_id)
+    try:
+        # Convert client_id to ObjectId type
+        client_object_id = ObjectId(client_id)
+    except:
+        # Return error response if client_id is invalid
+        return jsonify({'message': 'Invalid client ID'}), 400
 
     # Find and delete the document by its ObjectId
     result = clients_collection.delete_one({'_id': client_object_id})
 
+    # Check if document is deleted successfully
     if result.deleted_count == 1:
         return jsonify({'message': 'Client deleted successfully'}), 200
     else:
@@ -493,40 +509,31 @@ def delete_client():
 # Endpoint to edit client
 @application.route('/update_client/<client_id>', methods=['POST'])
 def update_client(client_id):
+    # Get form data and access token from request
     data = request.form.to_dict()
     access_token = data.get('access_token')
-    if check_token(access_token) is False:
+
+    # Check access token
+    if not check_token(access_token):
         return jsonify({'token': False}), 401
-    # Convert the client_id to ObjectId type
-    client_object_id = ObjectId(client_id)
+
+    try:
+        # Convert client_id to ObjectId type
+        client_object_id = ObjectId(client_id)
+    except:
+        # Return error response if client_id is invalid
+        return jsonify({'message': 'Invalid client ID'}), 400
 
     # Retrieve the existing client document from MongoDB
     existing_client = clients_collection.find_one({'_id': client_object_id})
 
     if existing_client:
-        # Get data from the request
-        userpic = request.files.get('userpic')
-        data = request.form.to_dict()
+        # Update client fields if new data is provided in the request
+        for field in ['name', 'phone', 'additional_phone', 'email', 'gender', 'birthday', 'instagram', 'telegram', 'comment']:
+            if field in data:
+                existing_client[field] = data[field]
 
-        # Update fields if new data is provided in the request
-        if 'name' in data:
-            existing_client['name'] = data['name']
-        if 'phone' in data:
-            existing_client['phone'] = data['phone']
-        if 'additional_phone' in data:
-            existing_client['additional_phone'] = data['additional_phone']
-        if 'email' in data:
-            existing_client['email'] = data['email']
-        if 'gender' in data:
-            existing_client['gender'] = data['gender']
-        if 'birthday' in data:
-            existing_client['birthday'] = data['birthday']
-        if 'instagram' in data:
-            existing_client['instagram'] = data['instagram']
-        if 'telegram' in data:
-            existing_client['telegram'] = data['telegram']
-        if 'comment' in data:
-            existing_client['comment'] = data['comment']
+        # Update client status if provided in the request
         if 'status' in data:
             status_doc = statuses_collection.find_one({'status': data['status']})
             if status_doc:
@@ -534,97 +541,126 @@ def update_client(client_id):
             existing_client['status'] = status_doc
 
         # Update userpic if a new userpic is provided in the request
-        def process_and_store_userpic(userpic):
-            if userpic:
-                try:
-                    # Read the image file as binary data
-                    image_data = userpic.read()
-
-                    # Encode the binary image data as base64
-                    base64_image = base64.b64encode(image_data).decode('utf-8')
-
-                    # Return the base64 encoded image data for MongoDB storage
-                    return base64_image
-
-                except Exception as e:
-                    # Handle any potential errors while processing the image
-                    print(f"Error processing image: {str(e)}")
-                    return None
-
-            else:
-                # Handle invalid or missing userpic files
-                return None
-
+        userpic = request.files.get('userpic')
         if userpic:
             existing_client['userpic'] = process_and_store_userpic(userpic)
 
         # Update the client document in MongoDB
-        clients_collection.find_one_and_update({'_id': client_object_id}, {'$set': existing_client})
+        clients_collection.replace_one({'_id': client_object_id}, existing_client)
 
         return jsonify({'message': 'Client updated successfully'}), 200
 
     else:
         return jsonify({'message': 'Client not found'}), 404
 
+def process_and_store_userpic(userpic):
+    try:
+        # Read the image file as binary data
+        image_data = userpic.read()
+
+        # Encode the binary image data as base64
+        base64_image = base64.b64encode(image_data).decode('utf-8')
+
+        # Return the base64 encoded image data for MongoDB storage
+        return base64_image
+
+    except Exception as e:
+        # Handle any potential errors while processing the image
+        print(f"Error processing image: {str(e)}")
+        return None
+
 
 # Endpoint to create new client status
 @application.route('/new_status', methods=['POST'])
 def new_status():
+    # Get data from request
     data = request.get_json()
-    access_token = data.get('access_token')
-    if check_token(access_token) is False:
-        return jsonify({'token': False}), 401
-    user_id = decode_access_token(access_token, SECRET_KEY).get('user_id')
 
+    # Extract access_token and status details from data
+    access_token = data.get('access_token')
     status = data.get('status')
     colour = data.get('colour')
     type = data.get('type')
+
+    # Check access token
+    if not check_token(access_token):
+        return jsonify({'token': False}), 401
+
+    # Decode user_id from access token
+    user_id = decode_access_token(access_token, SECRET_KEY).get('user_id')
+
+    # Check if status already exists
     is_present = statuses_collection.find_one({'status': status, 'type': type, 'user_id': user_id})
-    if is_present is None:
-        statuses_collection.insert_one({'status': status, 'colour': colour, 'type': type, 'user_id': user_id})
-        return jsonify({'message': 'Created successfully'}), 200
-    else:
+    if is_present:
         return jsonify({'message': 'Status already exists'}), 409
+
+    # Insert new status document
+    statuses_collection.insert_one({'status': status, 'colour': colour, 'type': type, 'user_id': user_id})
+
+    return jsonify({'message': 'Created successfully'}), 200
 
 
 @application.route('/get_statuses', methods=['POST'])
 def get_statuses():
+    # Get data from request
     data = request.get_json()
+
+    # Extract access_token and type from data
     access_token = data.get('access_token')
-    if check_token(access_token) is False:
-        return jsonify({'token': False}), 401
-    user_id = decode_access_token(access_token, SECRET_KEY).get('user_id')
     type = data.get('type')
+
+    # Check access token
+    if not check_token(access_token):
+        return jsonify({'token': False}), 401
+
+    # Decode user_id from access token
+    user_id = decode_access_token(access_token, SECRET_KEY).get('user_id')
+
+    # Prepare filter criteria based on user_id and type
     filter_criteria = {'user_id': user_id}
     if type:
-        statuses_collection.create_index([("$**", "text")])
-        filter_criteria['$text'] = {'$search': type}
+        filter_criteria['type'] = type
 
-    # Retrieve specific fields from all documents in the collection
+    # Retrieve documents from the collection based on filter criteria
     documents = list(statuses_collection.find(filter_criteria))
+
+    # Convert ObjectId to string for each document
     for document in documents:
         document['_id'] = str(document['_id'])
 
-    response = Response(json_util.dumps(
-        {'statuses': documents},
-        ensure_ascii=False).encode('utf-8'),
-                        content_type='application/json;charset=utf-8')
+    # Serialize the response documents using json_util from pymongo and specify encoding
+    response = Response(
+        json_util.dumps({'statuses': documents}, ensure_ascii=False).encode('utf-8'),
+        content_type='application/json;charset=utf-8'
+    )
+
     return response, 200
 
 
 @application.route('/client_info', methods=['POST'])
 def client_info():
+    # Get data from request
     data = request.get_json()
+
+    # Extract access_token and client_id from data
     access_token = data.get('access_token')
-    if check_token(access_token) is False:
+    client_id = data.get('client_id')
+
+    # Check access token
+    if not check_token(access_token):
         return jsonify({'token': False}), 401
 
-    client_id = data.get('client_id')
-    object_id = ObjectId(client_id)
+    # Convert client_id to ObjectId
+    try:
+        object_id = ObjectId(client_id)
+    except:
+        return jsonify({'message': 'Invalid client ID'}), 400
+
+    # Find client document by ObjectId
     client_document = clients_collection.find_one({'_id': object_id})
 
     if client_document:
-        # Convert ObjectId to string before returning the response
+        # Convert ObjectId to string for client document
         client_document['_id'] = str(client_document['_id'])
 
         # Find orders where email matches client email
@@ -669,66 +705,74 @@ def client_info():
             'total_pages': total_pages
         }
 
-        # Use dumps() to handle ObjectId serialization
+        # Serialize response data using json.dumps() with ObjectId serialization
         return json.dumps(response_data, default=str), 200, {'Content-Type': 'application/json'}
     else:
-        response = jsonify({'message': 'Client not found'}), 404
-        return response
+        return jsonify({'message': 'Client not found'}), 404
 
 
 # Endpoint to get orders list
 @application.route('/orders', methods=['POST'])
 def orders():
+    # Get data from request
     data = request.get_json()
+
+    # Extract access_token and user_id from data
     access_token = data.get('access_token')
-    if check_token(access_token) is False:
-        return jsonify({'token': False}), 401
     user_id = decode_access_token(access_token, SECRET_KEY).get('user_id')
+
+    # Check access token
+    if not check_token(access_token):
+        return jsonify({'token': False}), 401
+
+    # Extract filtering parameters from data
     keyword = data.get('keyword')
     page = data.get('page', 1)  # Default to page 1 if not provided
     per_page = data.get('per_page', 10)  # Default to 10 items per page if not provided
 
+    # Prepare filter criteria
     filter_criteria = {'user_id': user_id}
     if keyword:
         regex_pattern = f'.*{re.escape(keyword)}.*'
         filter_criteria['name'] = {'$regex': regex_pattern, '$options': 'i'}
 
-    # Count the total number of clients that match the filter criteria
+    # Count the total number of orders that match the filter criteria
     total_orders = orders_collection.count_documents(filter_criteria)
-
     total_pages = math.ceil(total_orders / per_page)
 
     # Paginate the query results using skip and limit, and apply filters
     skip = (page - 1) * per_page
     documents = list(orders_collection.find(filter_criteria).skip(skip).limit(per_page))
+
+    # Convert ObjectId to string and format date for each document
     for document in documents:
         document['_id'] = str(document['_id'])
         document['date'] = document['date'].strftime("%a %b %d %Y")
 
+    # Sort documents based on sort_by parameter
     sort_by = data.get('sort_by')
     if sort_by:
         reverse_sort = data.get('reverse_sort', False)
         if sort_by == 'date':
-            documents = sorted(documents, key=lambda x: x.get('date', {}).get('$date', ''), reverse=reverse_sort)
-        elif sort_by == 'client':
-            documents = sorted(documents, key=lambda x: x.get('client', {}).get('name', ''), reverse=reverse_sort)
-        elif sort_by == 'status':
-            documents = sorted(documents, key=lambda x: x.get('status', {}).get('status', ''), reverse=reverse_sort)
-        elif sort_by == 'source':
-            documents = sorted(documents, key=lambda x: x.get('source', ''), reverse=reverse_sort)
-        elif sort_by == 'payment':
-            documents = sorted(documents, key=lambda x: x.get('payment', ''), reverse=reverse_sort)
+            documents = sorted(documents, key=lambda x: x.get('date', ''), reverse=reverse_sort)
+        elif sort_by in ('client', 'status', 'source', 'payment'):
+            documents = sorted(documents, key=lambda x: x.get(sort_by, ''), reverse=reverse_sort)
 
-    # Calculate the range of clients being displayed
+    # Calculate the range of orders being displayed
     start_range = skip + 1
     end_range = min(skip + per_page, total_orders)
 
     # Serialize the documents using json_util from pymongo and specify encoding
-    response = Response(json_util.dumps(
-        {'orders': documents, 'total_orders': total_orders, 'start_range': start_range, 'end_range': end_range,
-         'total_pages': total_pages},
-        ensure_ascii=False).encode('utf-8'),
-                        content_type='application/json;charset=utf-8')
+    response = Response(
+        json_util.dumps({
+            'orders': documents,
+            'total_orders': total_orders,
+            'start_range': start_range,
+            'end_range': end_range,
+            'total_pages': total_pages
+        }, ensure_ascii=False).encode('utf-8'),
+        content_type='application/json;charset=utf-8'
+    )
     return response, 200
 
 
