@@ -17,6 +17,8 @@ from io import BytesIO
 from uuid import uuid4
 from flask_bcrypt import Bcrypt
 import telebot
+import random
+import string
 
 application = Flask(__name__)
 CORS(application)
@@ -284,6 +286,45 @@ def demo_register():
         return f'Error sending email: {str(e)}'
 
 
+def generate_token():
+    return ''.join(random.choices(string.ascii_letters + string.digits, k=20))
+
+
+@application.route('/forgot_password', methods=['POST'])
+def forgot_password():
+    data = request.get_json()
+    email = data.get('email')
+
+    user = users_collection.find_one({'email': email})
+    if user:
+        token = generate_token()
+        users_collection.update_one({'email': email}, {'$set': {'reset_token': token}})
+
+        msg = Message('Відновлення паролю', recipients=[email])
+        msg.body = f"Перейдіть за цим посиланням для відновлення паролю: http://127.0.0.1:5000/reset_password?token={token}"
+        mail.send(msg)
+
+        return jsonify({'message': True}), 200
+    else:
+        return jsonify({'message': False}), 404
+
+
+@application.route('/reset_password', methods=['POST'])
+def reset_password():
+    data = request.get_json()
+    token = data.get('reset_token')
+    new_password = data.get('new_password')
+
+    user = users_collection.find_one({'reset_token': token})
+    if user:
+        hashed_password = bcrypt.generate_password_hash(new_password).decode('utf-8')
+        users_collection.update_one({'reset_token': token}, {'$set': {'password': hashed_password, 'reset_token': None}})
+
+        return jsonify({'message': True}), 200
+    else:
+        return jsonify({'message': False}), 400
+
+
 def send_welcome_email(email):
     msg = Message('Презентація СРМ для вашого бізнесу', recipients=[email])
 
@@ -401,12 +442,19 @@ def clients():
         client['total_price_sum'] = total_price_sum
         client['latest_order_date'] = latest_order_date
         client['_id'] = str(client['_id'])
+        client['orders_amount'] = len(client_orders)
         response_clients.append(client)
 
     sort_by = data.get('sort_by')
     if sort_by:
         reverse_sort = data.get('reverse_sort', False)
-        response_clients = sorted(response_clients, key=lambda x: x.get(sort_by, 0), reverse=reverse_sort)
+        if sort_by == 'latest_order_date':
+            default_order_date = datetime.min
+            response_clients = sorted(response_clients, key=lambda x: x.get(sort_by, default_order_date) or default_order_date, reverse=reverse_sort)
+        elif sort_by == 'status':
+            response_clients = sorted(response_clients, key=lambda x: x.get("status", {}).get("status", ""), reverse=reverse_sort)
+        else:
+            response_clients = sorted(response_clients, key=lambda x: x.get(sort_by, 0), reverse=reverse_sort)
 
     # Calculate the range of clients being displayed
     start_range = skip + 1
@@ -642,8 +690,8 @@ def orders():
 
     filter_criteria = {'user_id': user_id}
     if keyword:
-        orders_collection.create_index([("$**", "text")])
-        filter_criteria['$text'] = {'$search': keyword}
+        regex_pattern = f'.*{re.escape(keyword)}.*'
+        filter_criteria['name'] = {'$regex': regex_pattern, '$options': 'i'}
 
     # Count the total number of clients that match the filter criteria
     total_orders = orders_collection.count_documents(filter_criteria)
@@ -656,10 +704,20 @@ def orders():
     for document in documents:
         document['_id'] = str(document['_id'])
         document['date'] = document['date'].strftime("%a %b %d %Y")
+
     sort_by = data.get('sort_by')
     if sort_by:
         reverse_sort = data.get('reverse_sort', False)
-        documents = sorted(documents, key=lambda x: x.get(sort_by, 0), reverse=reverse_sort)
+        if sort_by == 'date':
+            documents = sorted(documents, key=lambda x: x.get('date', {}).get('$date', ''), reverse=reverse_sort)
+        elif sort_by == 'client':
+            documents = sorted(documents, key=lambda x: x.get('client', {}).get('name', ''), reverse=reverse_sort)
+        elif sort_by == 'status':
+            documents = sorted(documents, key=lambda x: x.get('status', {}).get('status', ''), reverse=reverse_sort)
+        elif sort_by == 'source':
+            documents = sorted(documents, key=lambda x: x.get('source', ''), reverse=reverse_sort)
+        elif sort_by == 'payment':
+            documents = sorted(documents, key=lambda x: x.get('payment', ''), reverse=reverse_sort)
 
     # Calculate the range of clients being displayed
     start_range = skip + 1
@@ -694,6 +752,7 @@ def add_order():
     variations = data.get('variations')
     discount_sum = data.get('discount_sum', None)
     discount_per = data.get('discount_per', None)
+    cashier = data.get('cashier')
 
     total_sum = 0
     for variation in variations:
@@ -728,6 +787,24 @@ def add_order():
     if is_present is None:
         orders_collection.insert_one(document)
 
+    if status_doc['status'] == 'Оплачено':
+        cashier = cashiers_collection.find_one({'name': cashier, 'user_id': user_id})
+        balance = cashier['balance']
+        incomes = cashier['incomes']
+        cashiers_collection.find_one_and_update(cashier, {'$set': {'balance': balance + total_sum}})
+        cashiers_collection.find_one_and_update(cashier, {'$set': {'incomes': incomes + total_sum}})
+        transaction = {
+            'type': "На рахунок",
+            'cashier': cashier['name'],
+            'sum': total_sum,
+            'counterpartie': '',
+            'date': datetime.now(),
+            'category': '',
+            'comment': '',
+            'user_id': user_id
+        }
+        transactions_collection.insert_one(transaction)
+
     return jsonify({'message': True}), 200
 
 
@@ -749,6 +826,7 @@ def update_order():
     access_token = data.get('access_token')
     if check_token(access_token) is False:
         return jsonify({'token': False}), 401
+    user_id = decode_access_token(access_token, SECRET_KEY).get('user_id')
 
     order_id = data.get('order_id')
     order = orders_collection.find_one({'_id': ObjectId(order_id)})
@@ -758,7 +836,6 @@ def update_order():
     # Update task fields based on the provided data
     order['client'] = data.get('client', order['client'])
     order['email'] = data.get('email', order['email'])
-    #order['date'] = datetime.strptime(data.get('date', order['date']), "%a %b %d %Y")
     order['shipping'] = data.get('shipping', order['shipping'])
     status = data.get('status')
     if status:
@@ -769,6 +846,7 @@ def update_order():
     order['source'] = data.get('source', order['source'])
     order['payment'] = data.get('payment', order['payment'])
     order['comment'] = data.get('comment', order['comment'])
+    order['cashier'] = data.get('cashier', order['cashier'])
 
     variations = data.get('variations')
     if variations:
@@ -780,6 +858,24 @@ def update_order():
     for variation in order['variations']:
         total_sum += variation['price'] * variation['amount']
     orders_collection.find_one_and_update(order, {'$set': {'total_sum': total_sum}})
+
+    if status == 'Оплачено':
+        cashier = cashiers_collection.find_one({'name': order["cashier"], 'user_id': user_id})
+        balance = cashier['balance']
+        incomes = cashier['incomes']
+        cashiers_collection.find_one_and_update(cashier, {'$set': {'balance': balance + total_sum}})
+        cashiers_collection.find_one_and_update(cashier, {'$set': {'incomes': incomes + total_sum}})
+        transaction = {
+            'type': "На рахунко",
+            'cashier': cashier['name'],
+            'sum': total_sum,
+            'counterpartie': '',
+            'date': datetime.now(),
+            'category': '',
+            'comment': '',
+            'user_id': user_id
+        }
+        transactions_collection.insert_one(transaction)
     return jsonify({'message': True}), 200
 
 
@@ -996,8 +1092,8 @@ def tasks():
 
     filter_criteria = {'user_id': user_id}
     if keyword:
-        tasks_collection.create_index([("$**", "text")])
-        filter_criteria['$text'] = {'$search': keyword}
+        regex_pattern = f'.*{re.escape(keyword)}.*'
+        filter_criteria['headline'] = {'$regex': regex_pattern, '$options': 'i'}
 
     # Count the total number of clients that match the filter criteria
     total_tasks = tasks_collection.count_documents(filter_criteria)
@@ -1013,7 +1109,10 @@ def tasks():
     sort_by = data.get('sort_by')
     if sort_by:
         reverse_sort = data.get('reverse_sort', False)
-        documents = sorted(documents, key=lambda x: x.get(sort_by, 0), reverse=reverse_sort)
+        if sort_by == 'status':
+            documents = sorted(documents, key=lambda x: x.get("status", {}).get("status", ""), reverse=reverse_sort)
+        else:
+            documents = sorted(documents, key=lambda x: x.get(sort_by, 0), reverse=reverse_sort)
 
     # Calculate the range of clients being displayed
     start_range = skip + 1
@@ -1120,6 +1219,7 @@ def add_product():
             del status_doc['_id']
 
     category = data.get('category')
+    units = data.get('units')
     warehouse = data.get('warehouse')
     comment = data.get('comment')
     variations = data.get('variations')
@@ -1141,10 +1241,12 @@ def add_product():
     pieces = sum(variation.get('in_stock', 0) for variation in variations)
 
     document = {
+        'date': datetime.now(),
         'name': name,
         'description': description,
         'status': status_doc,
         'category': category,
+        'units': units,
         'warehouse': warehouse,
         'subwarehouse': subwarehouse,
         'comment': comment,
@@ -1184,12 +1286,10 @@ def products():
         regex_pattern = f'.*{re.escape(subwarehouse)}.*'
         filter_criteria['subwarehouse'] = {'$regex': regex_pattern, '$options': 'i'}
 
-    # Count the total number of clients that match the filter criteria
     total_products = products_collection.count_documents(filter_criteria)
 
     total_pages = math.ceil(total_products / per_page)
 
-    # Paginate the query results using skip and limit, and apply filters
     skip = (page - 1) * per_page
     documents = list(products_collection.find(filter_criteria).skip(skip).limit(per_page))
     for document in documents:
@@ -1198,11 +1298,24 @@ def products():
         for variation in document['variations']:
             variation['name'] = document['name']
 
-    # Calculate the range of clients being displayed
+    sort_by = data.get('sort_by')
+    if sort_by:
+        reverse_sort = data.get('reverse_sort', False)
+        if sort_by == 'category':
+            documents = sorted(documents, key=lambda x: x.get('category', ''), reverse=reverse_sort)
+        elif sort_by == 'date':
+            documents = sorted(documents, key=lambda x: x.get('date', ''),
+                               reverse=reverse_sort)
+        elif sort_by == 'warehouse':
+            documents = sorted(documents, key=lambda x: x.get('warehouse', ''), reverse=reverse_sort)
+        elif sort_by == 'pieces':
+            documents = sorted(documents, key=lambda x: x.get('pieces', 0), reverse=reverse_sort)
+        elif sort_by == 'status':
+            documents = sorted(documents, key=lambda x: x.get('status', {}).get('status', ''), reverse=reverse_sort)
+
     start_range = skip + 1
     end_range = min(skip + per_page, total_products)
 
-    # Serialize the documents using json_util from pymongo and specify encoding
     response = Response(json_util.dumps(
         {'products': documents, 'total_products': total_products, 'start_range': start_range, 'end_range': end_range,
          'total_pages': total_pages},
@@ -1261,6 +1374,7 @@ def update_product():
             del status_doc['_id']
         product['status'] = status_doc
     product['category'] = data.get('category', product['category'])
+    product['units'] = data.get('units', product['units'])
     product['warehouse'] = data.get('warehouse', product['warehouse'])
     product['subwarehouse'] = data.get('subwarehouse', product['subwarehouse'])
     product['comment'] = data.get('comment', product['comment'])
@@ -1599,8 +1713,8 @@ def transactions():
 
     filter_criteria = {'user_id': user_id}
     if keyword:
-        transactions_collection.create_index([("$**", "text")])
-        filter_criteria['$text'] = {'$search': keyword}
+        regex_pattern = f'.*{re.escape(keyword)}.*'
+        filter_criteria['comment'] = {'$regex': regex_pattern, '$options': 'i'}
 
     # Count the total number of transactions that match the filter criteria
     total_transactions = transactions_collection.count_documents(filter_criteria)
@@ -1612,12 +1726,16 @@ def transactions():
     documents = list(transactions_collection.find(filter_criteria).skip(skip).limit(per_page))
     for document in documents:
         document['_id'] = str(document['_id'])
+        document['date'] = datetime.strptime(str(document['date']), "%a %b %d %Y")
 
     # Sorting logic
     sort_by = data.get('sort_by')
     if sort_by:
         reverse_sort = data.get('reverse_sort', False)
         documents = sorted(documents, key=lambda x: x.get(sort_by, 0), reverse=reverse_sort)
+
+    for document in documents:
+        document['date'] = document['date'].strftime("%a %b %d %Y")
 
     # Calculate the range of transactions being displayed
     start_range = skip + 1
