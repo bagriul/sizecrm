@@ -40,6 +40,7 @@ counterparties_collection = db['counterparties']
 auto_transactions_collection = db['auto_transactions']
 demo_users_collection = db['demo_users']
 mailing_history_collection = db['mailing_history']
+task_participants_collection = db['task_participants']
 
 google_bp = make_google_blueprint(client_id='YOUR_GOOGLE_CLIENT_ID',
                                   client_secret='YOUR_GOOGLE_CLIENT_SECRET',
@@ -277,6 +278,78 @@ def demo_register():
         return 'Email sent successfully!'
     except Exception as e:
         return f'Error sending email: {str(e)}'
+
+
+def generate_random_credentials():
+    username = ''.join(random.choices(string.ascii_lowercase + string.digits, k=8))
+    password = ''.join(random.choices(string.ascii_letters + string.digits + string.punctuation, k=12))
+    return username, password
+
+
+def check_credentials_exist(username, password):
+    existing_user = users_collection.find_one({'username': username, 'password': password})
+    return existing_user is not None
+
+
+def generate_tokens(user_id):
+    access_token_payload = {
+        'user_id': user_id,
+        'exp': datetime.utcnow() + timedelta(minutes=30)  # Token expires in 30 minutes
+    }
+    access_token = jwt.encode(access_token_payload, SECRET_KEY, algorithm='HS256')
+
+    refresh_token_payload = {
+        'user_id': user_id,
+        'exp': datetime.utcnow() + timedelta(days=30)  # Token expires in 30 days
+    }
+    refresh_token = jwt.encode(refresh_token_payload, SECRET_KEY, algorithm='HS256')
+
+    return access_token, refresh_token
+
+
+@application.route('/temporary_user_register', methods=['POST'])
+def temporary_user_register():
+    # Generate random username and password
+    username, password = generate_random_credentials()
+
+    # Check if credentials already exist
+    while check_credentials_exist(username, password):
+        username, password = generate_random_credentials()
+
+    # Hash the password using bcrypt
+    hashed_password = bcrypt.generate_password_hash(password).decode('utf-8')
+
+    # Insert user data into the database
+    document = {
+        'username': username,
+        'password': hashed_password,
+        'type': 'temporary'
+    }
+    users_collection.insert_one(document)
+
+    # Generate access and refresh tokens
+    access_token, refresh_token = generate_tokens(username)  # You can use username as user_id here
+
+    # Return access and refresh tokens
+    return jsonify({'access_token': access_token, 'refresh_token': refresh_token}), 200
+
+
+@application.route('/temporary_user_delete', methods=['POST'])
+def temporary_user_delete():
+    data = request.get_json()
+    access_token = data.get('access_token')
+    user_id = decode_access_token(access_token, SECRET_KEY).get('user_id')
+
+    deleted_count = 0
+    for collection_name in db.list_collection_names():
+        collection = db[collection_name]
+        result = collection.delete_many({'user_id': user_id})
+        deleted_count += result.deleted_count
+
+    # Delete the user
+    users_collection.delete_one({'username': user_id})
+
+    return jsonify({'message': True}), 200
 
 
 def generate_token():
@@ -791,64 +864,64 @@ def orders():
 @application.route('/add_order', methods=['POST'])
 def add_order():
     data = request.get_json()
+
+    # Check access token
     access_token = data.get('access_token')
-    if check_token(access_token) is False:
+    if not check_token(access_token):
         return jsonify({'token': False}), 401
+
     user_id = decode_access_token(access_token, SECRET_KEY).get('user_id')
-    client = data.get('client')
-    email = data.get('email')
+
+    # Extract order details from request data
+    client_email = data.get('email')
     shipping = data.get('shipping')
     status = data.get('status')
-    status_doc = statuses_collection.find_one({'status': status})
-    if status_doc:
-        del status_doc['_id']
     source = data.get('source')
     payment = data.get('payment')
     comment = data.get('comment')
     variations = data.get('variations')
-    discount_sum = data.get('discount_sum', None)
-    discount_per = data.get('discount_per', None)
+    discount_sum = data.get('discount_sum', 0)
+    discount_per = data.get('discount_per', 0)
     cashier = data.get('cashier')
 
-    total_sum = 0
-    for variation in variations:
-        total_sum += variation['price'] * variation['amount']
+    # Get client details
+    client = clients_collection.find_one({'email': client_email})
 
-    if discount_sum:
-        total_sum = total_sum - discount_sum
-    if discount_per:
-        total_sum = total_sum - (total_sum * discount_per / 100)
+    # Calculate total sum
+    total_sum = sum(variation['price'] * variation['amount'] for variation in variations)
+    total_sum -= discount_sum
+    total_sum -= (total_sum * discount_per / 100)
 
-    client = clients_collection.find_one({'email': email})
+    # Prepare order document
+    order_doc = {
+        'date': datetime.today(),
+        'client': client,
+        'email': client_email,
+        'gender': client.get('gender'),
+        'shipping': shipping,
+        'status': statuses_collection.find_one({'status': status}, {'_id': 0}),
+        'source': source,
+        'payment': payment,
+        'comment': comment,
+        'variations': variations,
+        'discount_sum': discount_sum,
+        'discount_per': discount_per,
+        'total_sum': total_sum,
+        'user_id': user_id
+    }
 
-    # Get today's date
-    today = datetime.today()
+    # Check if order already exists
+    existing_order = orders_collection.find_one(order_doc)
+    if existing_order is None:
+        orders_collection.insert_one(order_doc)
 
-    document = {'date': today,
-                'client': client,
-                'email': email,
-                'gender': client['gender'],
-                'shipping': shipping,
-                'status': status_doc,
-                'source': source,
-                'payment': payment,
-                'comment': comment,
-                'variations': variations,
-                'discount_sum': discount_sum,
-                'discount_per': discount_per,
-                'total_sum': total_sum,
-                'user_id': user_id}
-
-    is_present = orders_collection.find_one(document)
-    if is_present is None:
-        orders_collection.insert_one(document)
-
-    if status_doc['status'] == 'Оплачено':
+    # Process payment if status is 'Оплачено'
+    if status == 'Оплачено':
         cashier = cashiers_collection.find_one({'name': cashier, 'user_id': user_id})
-        balance = cashier['balance']
-        incomes = cashier['incomes']
-        cashiers_collection.find_one_and_update(cashier, {'$set': {'balance': balance + total_sum}})
-        cashiers_collection.find_one_and_update(cashier, {'$set': {'incomes': incomes + total_sum}})
+        balance = cashier.get('balance', 0)
+        incomes = cashier.get('incomes', 0)
+        cashiers_collection.update_one({'_id': cashier['_id']}, {'$set': {'balance': balance + total_sum}})
+        cashiers_collection.update_one({'_id': cashier['_id']}, {'$set': {'incomes': incomes + total_sum}})
         transaction = {
             'type': "На рахунок",
             'cashier': cashier['name'],
@@ -879,9 +952,12 @@ def delete_order():
 @application.route('/update_order', methods=['POST'])
 def update_order():
     data = request.get_json()
+
+    # Check access token
     access_token = data.get('access_token')
-    if check_token(access_token) is False:
+    if not check_token(access_token):
         return jsonify({'token': False}), 401
+
     user_id = decode_access_token(access_token, SECRET_KEY).get('user_id')
 
     order_id = data.get('order_id')
@@ -889,40 +965,35 @@ def update_order():
     if order is None:
         return jsonify({'message': False}), 404
 
-    # Update task fields based on the provided data
-    order['client'] = data.get('client', order['client'])
-    order['email'] = data.get('email', order['email'])
-    order['shipping'] = data.get('shipping', order['shipping'])
-    status = data.get('status')
-    if status:
-        status_doc = statuses_collection.find_one({'status': status})
-        if status_doc:
-            del status_doc['_id']
-        order['status'] = status_doc
-    order['source'] = data.get('source', order['source'])
-    order['payment'] = data.get('payment', order['payment'])
-    order['comment'] = data.get('comment', order['comment'])
-    order['cashier'] = data.get('cashier', order['cashier'])
+    # Update order fields based on the provided data
+    order.update({
+        'client': data.get('client', order.get('client')),
+        'email': data.get('email', order.get('email')),
+        'shipping': data.get('shipping', order.get('shipping')),
+        'status': statuses_collection.find_one({'status': data.get('status')}, {'_id': 0}) if 'status' in data else order.get('status'),
+        'source': data.get('source', order.get('source')),
+        'payment': data.get('payment', order.get('payment')),
+        'comment': data.get('comment', order.get('comment')),
+        'cashier': data.get('cashier', order.get('cashier')),
+        'variations': data.get('variations', order.get('variations'))
+    })
 
-    variations = data.get('variations')
-    if variations:
-        order['variations'] = variations
+    # Update the order in the database
     orders_collection.update_one({'_id': ObjectId(order_id)}, {'$set': order})
 
-    order = orders_collection.find_one({'_id': ObjectId(order_id)})
-    total_sum = 0
-    for variation in order['variations']:
-        total_sum += variation['price'] * variation['amount']
-    orders_collection.find_one_and_update(order, {'$set': {'total_sum': total_sum}})
+    # Recalculate total_sum and update it in the order document
+    total_sum = sum(variation['price'] * variation['amount'] for variation in order['variations'])
+    orders_collection.update_one({'_id': ObjectId(order_id)}, {'$set': {'total_sum': total_sum}})
 
-    if status == 'Оплачено':
-        cashier = cashiers_collection.find_one({'name': order["cashier"], 'user_id': user_id})
-        balance = cashier['balance']
-        incomes = cashier['incomes']
-        cashiers_collection.find_one_and_update(cashier, {'$set': {'balance': balance + total_sum}})
-        cashiers_collection.find_one_and_update(cashier, {'$set': {'incomes': incomes + total_sum}})
+    # Process payment if status is 'Оплачено'
+    if order['status']['status'] == 'Оплачено':
+        cashier = cashiers_collection.find_one({'name': order['cashier'], 'user_id': user_id})
+        balance = cashier.get('balance', 0)
+        incomes = cashier.get('incomes', 0)
+        cashiers_collection.update_one({'_id': cashier['_id']}, {'$set': {'balance': balance + total_sum}})
+        cashiers_collection.update_one({'_id': cashier['_id']}, {'$set': {'incomes': incomes + total_sum}})
         transaction = {
-            'type': "На рахунко",
+            'type': "На рахунок",
             'cashier': cashier['name'],
             'sum': total_sum,
             'counterpartie': '',
@@ -932,100 +1003,111 @@ def update_order():
             'user_id': user_id
         }
         transactions_collection.insert_one(transaction)
+
     return jsonify({'message': True}), 200
 
 
 @application.route('/add_product_order', methods=['POST'])
 def add_product_order():
     data = request.get_json()
+
+    # Check access token
     access_token = data.get('access_token')
-    if check_token(access_token) is False:
+    if not check_token(access_token):
         return jsonify({'token': False}), 401
 
     order_id = data.get('order_id')
     order = orders_collection.find_one({'_id': ObjectId(order_id)})
     if order is None:
         return jsonify({'message': False}), 404
+
     variation_id = data.get('variation_id')
-    products_id_list = []
-    for product in order['products']:
-        products_id_list.append(str(product['_id']))
+    products_id_list = [str(product['_id']) for product in order.get('products', [])]
+
     if variation_id in products_id_list:
         for product in order['products']:
             if str(product['_id']) == variation_id:
-                product['amount'] = product['amount'] + 1
-                orders_collection.update_one({'_id': ObjectId(order_id)}, {'$set': {'products': order['products']}})
+                product['amount'] += 1
+                break
     else:
         variation = variations_collection.find_one({'_id': ObjectId(variation_id)})
-        document = {'_id': variation['_id'],
-                    'size': variation['size'],
-                    'colour': variation['colour'],
-                    'price': variation['price'],
-                    'in_stock': variation['in_stock'],
-                    "amount": 1,
-                    'photos': variation['photos'],
-                    'name': variation['name']}
+        if variation:
+            document = {
+                '_id': variation['_id'],
+                'size': variation['size'],
+                'colour': variation['colour'],
+                'price': variation['price'],
+                'in_stock': variation['in_stock'],
+                'amount': 1,
+                'photos': variation['photos'],
+                'name': variation['name']
+            }
+            orders_collection.update_one({'_id': ObjectId(order_id)}, {'$push': {'products': document}})
 
-        orders_collection.update_one(order, {'$push': {'products': document}})
-        order = orders_collection.find_one({'_id': ObjectId(order_id)})
-        total_sum = 0
-        for product in order['products']:
-            total_sum += product['price']
-        orders_collection.find_one_and_update(order, {'$set': {'total_sum': total_sum}})
-
+    # Recalculate total_sum and update it in the order document
     order = orders_collection.find_one({'_id': ObjectId(order_id)})
-    total_sum = 0
-    for product in order['products']:
-        total_sum += product['price'] * product['amount']
-    orders_collection.find_one_and_update(order, {'$set': {'total_sum': total_sum}})
+    total_sum = sum(product['price'] * product['amount'] for product in order.get('products', []))
+    orders_collection.update_one({'_id': ObjectId(order_id)}, {'$set': {'total_sum': total_sum}})
+
     return jsonify({'message': True}), 200
 
 
 @application.route('/delete_product_order', methods=['POST'])
 def delete_product_order():
     data = request.get_json()
+
+    # Check access token
     access_token = data.get('access_token')
-    if check_token(access_token) is False:
+    if not check_token(access_token):
         return jsonify({'token': False}), 401
 
     order_id = data.get('order_id')
     order = orders_collection.find_one({'_id': ObjectId(order_id)})
     if order is None:
         return jsonify({'message': False}), 404
+
     variation_id = data.get('variation_id')
+
+    # Try to remove the product from the order
     try:
         orders_collection.update_one(order, {'$pull': {'products': {'_id': ObjectId(variation_id)}}})
     except:
+        # If removing by ObjectId fails, try removing by string ID
         orders_collection.update_one(order, {'$pull': {'products': {'_id': variation_id}}})
+
+    # Recalculate total_sum and update it in the order document
     order = orders_collection.find_one({'_id': ObjectId(order_id)})
-    total_sum = 0
-    for product in order['products']:
-        total_sum += product['price'] * product['amount']
+    total_sum = sum(product['price'] * product['amount'] for product in order.get('products', []))
     orders_collection.find_one_and_update(order, {'$set': {'total_sum': total_sum}})
+
     return jsonify({'message': True}), 200
 
 
 @application.route('/order_info', methods=['POST'])
 def order_info():
     data = request.get_json()
+
+    # Check access token
     access_token = data.get('access_token')
-    if check_token(access_token) is False:
+    if not check_token(access_token):
         return jsonify({'token': False}), 401
 
     order_id = data.get('order_id')
     object_id = ObjectId(order_id)
+
+    # Find the order document by its ObjectId
     order_document = orders_collection.find_one({'_id': object_id})
 
     if order_document:
-        # Convert ObjectId to string before returning the response
+        # Convert ObjectId to string and format date before returning the response
         order_document['_id'] = str(order_document['_id'])
         order_document['date'] = order_document['date'].strftime("%a %b %d %Y")
 
-        # Use dumps() to handle ObjectId serialization
-        return json.dumps(order_document, default=str), 200, {'Content-Type': 'application/json'}
+        # Return the order document as JSON with proper content type
+        return jsonify(order_document), 200, {'Content-Type': 'application/json'}
     else:
-        response = jsonify({'message': 'Order not found'}), 404
-        return response
+        # Return a 404 response if the order is not found
+        return jsonify({'message': 'Order not found'}), 404
 
 
 @application.route('/add_task', methods=['POST'])
@@ -2390,6 +2472,189 @@ def get_mailing_history(data, user_id):
         doc['_id'] = str(doc['_id'])
 
     return documents
+
+
+@application.route('/save_task_participant', methods=['POST'])
+def save_task_participant():
+    data = request.get_json()
+
+    # Check access token
+    access_token = data.get('access_token')
+    if not check_token(access_token):
+        return jsonify({'token': False}), 401
+
+    # Decode user_id from access token
+    user_id = decode_access_token(access_token, SECRET_KEY).get('user_id')
+
+    # Extract name from request data
+    name = data.get('name')
+
+    # Create participant document
+    participant_doc = {'name': name, 'user_id': user_id}
+
+    # Check if participant already exists
+    existing_participant = task_participants_collection.find_one(participant_doc)
+
+    if existing_participant is None:
+        # Insert new participant document into the collection
+        task_participants_collection.insert_one(participant_doc)
+        return jsonify({'message': True}), 200
+    else:
+        # Return a conflict response if participant already exists
+        return jsonify({'message': False}), 409
+
+
+@application.route('/task_participants', methods=['POST'])
+def task_participants():
+    # Get access token from request data
+    data = request.get_json()
+    access_token = data.get('access_token')
+
+    # Check access token validity
+    if not check_token(access_token):
+        return jsonify({'token': False}), 401
+
+    # Decode user_id from access token
+    user_id = decode_access_token(access_token, SECRET_KEY).get('user_id')
+
+    # Define filter criteria based on user_id
+    filter_criteria = {'user_id': user_id}
+
+    # Fetch participants from the collection
+    participants = list(task_participants_collection.find(filter_criteria))
+
+    # Serialize the response using json_util from pymongo and specify encoding
+    response_data = {'participants': participants}
+    response = Response(
+        json_util.dumps(response_data, ensure_ascii=False).encode('utf-8'),
+        content_type='application/json;charset=utf-8'
+    )
+
+    return response, 200
+
+
+@application.route('/unsave_task_participant', methods=['POST'])
+def unsave_task_participant():
+    # Get data from request
+    data = request.get_json()
+
+    # Extract access token from data
+    access_token = data.get('access_token')
+
+    # Check if the access token is valid
+    if not check_token(access_token):
+        return jsonify({'token': False}), 401
+
+    # Decode user_id from access token
+    user_id = decode_access_token(access_token, SECRET_KEY).get('user_id')
+
+    # Get the name of the participant to delete
+    participant_name = data.get('name')
+
+    # Define filter criteria based on user_id and participant name
+    filter_criteria = {'user_id': user_id, 'name': participant_name}
+
+    # Find and delete the participant from the collection
+    result = task_participants_collection.delete_one(filter_criteria)
+
+    # Check if the participant was successfully deleted
+    if result.deleted_count == 1:
+        return jsonify({'message': True}), 200
+    else:
+        return jsonify({'message': False}), 404
+
+
+@application.route('/all_variations', methods=['POST'])
+def all_variations():
+    # Get data from request
+    data = request.get_json()
+
+    # Extract access token from data
+    access_token = data.get('access_token')
+
+    # Check if the access token is valid
+    if not check_token(access_token):
+        return jsonify({'token': False}), 401
+
+    # Decode user_id from access token
+    user_id = decode_access_token(access_token, SECRET_KEY).get('user_id')
+
+    # Retrieve all products from the database
+    products = products_collection.find({'user_id': user_id})
+
+    # Initialize an empty list to store all variations
+    all_variations = []
+
+    # Iterate through each product
+    for product in products:
+        # Get product name and id
+        product_name = product['name']
+        product_id = str(product['_id'])
+
+        # Iterate through each variation of the product
+        for variation in product['variations']:
+            # Add product name and id to the variation
+            variation['product_name'] = product_name
+            variation['product_id'] = product_id
+
+            # Add the variation to the list of all variations
+            all_variations.append(variation)
+
+    # Return the list of all variations as JSON response
+    return jsonify({'variations': all_variations}), 200
+
+
+@application.route('/update_variation', methods=['POST'])
+def update_variation():
+    # Get data from request
+    data = request.get_json()
+
+    # Extract access token from data
+    access_token = data.get('access_token')
+
+    # Check if the access token is valid
+    if not check_token(access_token):
+        return jsonify({'token': False}), 401
+
+    # Decode user_id from access token
+    user_id = decode_access_token(access_token, SECRET_KEY).get('user_id')
+
+    # Extract product ID, variation ID, and the parameters to update
+    product_id = data.get('product_id')
+    variation_id = data.get('variation_id')
+    updates = data.get('updates')  # This should be a dictionary of the parameters to update
+
+    # Validate required fields
+    if not product_id or not variation_id or not updates:
+        return jsonify({'message': False}), 400
+
+    # Retrieve the specific product
+    product = products_collection.find_one({'_id': ObjectId(product_id), 'user_id': user_id})
+
+    if not product:
+        return jsonify({'message': False}), 404
+
+    # Find the variation to update
+    variation_found = False
+    for variation in product['variations']:
+        if str(variation['_id']) == variation_id:
+            # Update the necessary fields in the variation
+            for key, value in updates.items():
+                if key in ['cost_price', 'price', 'in_stock', 'recommended_balance_amount']:
+                    variation[key] = value
+            variation_found = True
+            break
+
+    if not variation_found:
+        return jsonify({'message': False}), 404
+
+    # Update the product in the database
+    products_collection.update_one(
+        {'_id': ObjectId(product_id), 'user_id': user_id},
+        {'$set': {'variations': product['variations']}}
+    )
+
+    return jsonify({'message': True}), 200
 
 
 if __name__ == '__main__':
