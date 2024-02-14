@@ -41,6 +41,10 @@ auto_transactions_collection = db['auto_transactions']
 demo_users_collection = db['demo_users']
 mailing_history_collection = db['mailing_history']
 task_participants_collection = db['task_participants']
+products_categories_collection = db['products_categories']
+shipping_methods_collection = db['shipping_methods']
+order_sources_collection = db['order_sources']
+payment_methods_collection = db['payment_methods']
 
 google_bp = make_google_blueprint(client_id='YOUR_GOOGLE_CLIENT_ID',
                                   client_secret='YOUR_GOOGLE_CLIENT_SECRET',
@@ -2474,96 +2478,6 @@ def get_mailing_history(data, user_id):
     return documents
 
 
-@application.route('/save_task_participant', methods=['POST'])
-def save_task_participant():
-    data = request.get_json()
-
-    # Check access token
-    access_token = data.get('access_token')
-    if not check_token(access_token):
-        return jsonify({'token': False}), 401
-
-    # Decode user_id from access token
-    user_id = decode_access_token(access_token, SECRET_KEY).get('user_id')
-
-    # Extract name from request data
-    name = data.get('name')
-
-    # Create participant document
-    participant_doc = {'name': name, 'user_id': user_id}
-
-    # Check if participant already exists
-    existing_participant = task_participants_collection.find_one(participant_doc)
-
-    if existing_participant is None:
-        # Insert new participant document into the collection
-        task_participants_collection.insert_one(participant_doc)
-        return jsonify({'message': True}), 200
-    else:
-        # Return a conflict response if participant already exists
-        return jsonify({'message': False}), 409
-
-
-@application.route('/task_participants', methods=['POST'])
-def task_participants():
-    # Get access token from request data
-    data = request.get_json()
-    access_token = data.get('access_token')
-
-    # Check access token validity
-    if not check_token(access_token):
-        return jsonify({'token': False}), 401
-
-    # Decode user_id from access token
-    user_id = decode_access_token(access_token, SECRET_KEY).get('user_id')
-
-    # Define filter criteria based on user_id
-    filter_criteria = {'user_id': user_id}
-
-    # Fetch participants from the collection
-    participants = list(task_participants_collection.find(filter_criteria))
-
-    # Serialize the response using json_util from pymongo and specify encoding
-    response_data = {'participants': participants}
-    response = Response(
-        json_util.dumps(response_data, ensure_ascii=False).encode('utf-8'),
-        content_type='application/json;charset=utf-8'
-    )
-
-    return response, 200
-
-
-@application.route('/unsave_task_participant', methods=['POST'])
-def unsave_task_participant():
-    # Get data from request
-    data = request.get_json()
-
-    # Extract access token from data
-    access_token = data.get('access_token')
-
-    # Check if the access token is valid
-    if not check_token(access_token):
-        return jsonify({'token': False}), 401
-
-    # Decode user_id from access token
-    user_id = decode_access_token(access_token, SECRET_KEY).get('user_id')
-
-    # Get the name of the participant to delete
-    participant_name = data.get('name')
-
-    # Define filter criteria based on user_id and participant name
-    filter_criteria = {'user_id': user_id, 'name': participant_name}
-
-    # Find and delete the participant from the collection
-    result = task_participants_collection.delete_one(filter_criteria)
-
-    # Check if the participant was successfully deleted
-    if result.deleted_count == 1:
-        return jsonify({'message': True}), 200
-    else:
-        return jsonify({'message': False}), 404
-
-
 @application.route('/all_variations', methods=['POST'])
 def all_variations():
     # Get data from request
@@ -2655,6 +2569,136 @@ def update_variation():
     )
 
     return jsonify({'message': True}), 200
+
+
+@application.route('/settings', methods=['POST'])
+def handle_settings():
+    data = request.get_json()
+    setting_type = data.get('setting_type')
+    if setting_type == 'add':
+        return add_setting(request)
+    elif setting_type == 'view':
+        return view_settings(request)
+    elif setting_type == 'delete':
+        return delete_setting(request)
+    else:
+        return jsonify({'message': False}), 405
+
+
+def add_setting(request):
+    data = request.get_json()
+    access_token = data.get('access_token')
+
+    # Check token validity
+    if not check_token(access_token):
+        return jsonify({'token': False}), 401
+
+    user_id = decode_access_token(access_token, SECRET_KEY).get('user_id')
+
+    # Extract setting type from the request data
+    data_type = data.get('data_type')
+
+    # Extract setting data
+    setting_data = data.get('data')
+    setting_data['user_id'] = user_id
+
+    # Handle different setting types
+    collections_map = {
+        'status': statuses_collection,
+        'counterparty': counterparties_collection,
+        'task_participant': task_participants_collection,
+        'product_category': products_categories_collection,
+        'subwarehouse': warehouses_collection,
+        'shipping_method': shipping_methods_collection,
+        'order_source': order_sources_collection,
+        'payment_method': payment_methods_collection
+    }
+
+    # Insert setting data into the appropriate collection
+    if data_type in collections_map:
+        collection = collections_map[data_type]
+        collection.insert_one(setting_data)
+        return jsonify({'message': True}), 200
+    else:
+        return jsonify({'message': False}), 400
+
+
+def view_settings(request):
+    data = request.get_json()
+    access_token = data.get('access_token')
+
+    # Check token validity
+    if not check_token(access_token):
+        return jsonify({'token': False}), 401
+
+    user_id = decode_access_token(access_token, SECRET_KEY).get('user_id')
+
+    # Extract setting type from the request data
+    data_type = data.get('data_type')
+
+    # Handle different setting types
+    collections_map = {
+        'status': statuses_collection,
+        'counterparty': counterparties_collection,
+        'task_participant': task_participants_collection,
+        'product_category': products_categories_collection,
+        'subwarehouse': warehouses_collection,
+        'shipping_method': shipping_methods_collection,
+        'order_source': order_sources_collection,
+        'payment_method': payment_methods_collection
+    }
+
+    # Retrieve settings data from the appropriate collection
+    if data_type in collections_map:
+        collection = collections_map[data_type]
+        settings = list(collection.find({'user_id': user_id}))
+        for setting in settings:
+            setting['_id'] = str(setting['_id'])
+        return jsonify({'settings': settings}), 200
+    else:
+        return jsonify({'message': False}), 400
+
+
+def delete_setting(request):
+    data = request.get_json()
+    access_token = data.get('access_token')
+
+    # Check token validity
+    if not check_token(access_token):
+        return jsonify({'token': False}), 401
+
+    user_id = decode_access_token(access_token, SECRET_KEY).get('user_id')
+
+    # Extract setting type and setting ID from the request data
+    data_type = data.get('data_type')
+    setting_id = data.get('setting_id')
+
+    # Handle different setting types
+    collections_map = {
+        'status': statuses_collection,
+        'counterparty': counterparties_collection,
+        'task_participant': task_participants_collection,
+        'product_category': products_categories_collection,
+        'subwarehouse': warehouses_collection,
+        'shipping_method': shipping_methods_collection,
+        'order_source': order_sources_collection,
+        'payment_method': payment_methods_collection
+    }
+
+    # Retrieve the appropriate collection based on the setting type
+    if data_type in collections_map:
+        collection = collections_map[data_type]
+
+        # Delete the setting from the collection
+        result = collection.delete_one({'_id': ObjectId(setting_id), 'user_id': user_id})
+
+        # Check if the setting was successfully deleted
+        if result.deleted_count == 1:
+            return jsonify({'message': True}), 200
+        else:
+            return jsonify({'message': False}), 404
+    else:
+        return jsonify({'message': False}), 400
 
 
 if __name__ == '__main__':
