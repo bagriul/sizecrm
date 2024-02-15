@@ -22,7 +22,6 @@ import string
 
 application = Flask(__name__)
 CORS(application)
-session.permanent = True
 application.config['SECRET_KEY'] = config.SECRET_KEY
 SECRET_KEY = config.SECRET_KEY
 client = MongoClient(config.MONGO_STRING)
@@ -205,6 +204,7 @@ def login():
 
             # Save user's email if remember_me is checked
             if remember_me:
+                session.permanent = True
                 session['user_email'] = email
                 session['user_password'] = password
 
