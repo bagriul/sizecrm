@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify, Response
+from flask import Flask, request, jsonify, Response, session
 import jwt
 from pymongo import MongoClient, ASCENDING, DESCENDING
 from bson import json_util, ObjectId
@@ -22,6 +22,7 @@ import string
 
 application = Flask(__name__)
 CORS(application)
+session.permanent = True
 application.config['SECRET_KEY'] = config.SECRET_KEY
 SECRET_KEY = config.SECRET_KEY
 client = MongoClient(config.MONGO_STRING)
@@ -180,6 +181,7 @@ def login():
     data = request.get_json()
     email = data.get('email')
     password = data.get('password')
+    remember_me = data.get('remember_me', False)  # Assuming remember_me is a boolean field in the request
 
     # Check if the user exists in the database
     user = users_collection.find_one({'email': email})
@@ -190,18 +192,26 @@ def login():
         if bcrypt.check_password_hash(hashed_password_in_db, password):
             user_id = str(user['_id'])  # Assuming user ID is stored as ObjectId in MongoDB
 
+            # Set expiration time based on remember_me
+            if remember_me:
+                expiration_time = datetime.utcnow() + timedelta(days=1)
+            else:
+                expiration_time = datetime.utcnow() + timedelta(minutes=30)
+
             # Generate tokens based on user ID
             access_token = jwt.encode(
-                {'user_id': user_id, 'exp': datetime.utcnow() + timedelta(minutes=30)},
-                application.config['SECRET_KEY'], algorithm='HS256')
-            refresh_token = jwt.encode(
-                {'user_id': user_id, 'exp': datetime.utcnow() + timedelta(days=1)},
+                {'user_id': user_id, 'exp': expiration_time},
                 application.config['SECRET_KEY'], algorithm='HS256')
 
-            response = jsonify({'access_token': access_token, 'refresh_token': refresh_token}), 200
+            # Save user's email if remember_me is checked
+            if remember_me:
+                session['user_email'] = email
+                session['user_password'] = password
+
+            response = jsonify({'access_token': access_token}), 200
             return response
 
-    response = jsonify({'message': 'Invalid credentials'}), 401
+    response = jsonify({'message': False}), 401
     return response
 
 
@@ -2651,7 +2661,7 @@ def view_settings(request):
     # Retrieve settings data from the appropriate collection
     if data_type in collections_map:
         collection = collections_map[data_type]
-        settings = list(collection.find({'user_id': user_id}))
+        settings = list(collection.find({"$or": [{"user_id": user_id}, {"user_id": "0"}]}))
         for setting in settings:
             setting['_id'] = str(setting['_id'])
         return jsonify({'settings': settings}), 200
