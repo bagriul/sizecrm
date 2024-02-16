@@ -45,6 +45,8 @@ products_categories_collection = db['products_categories']
 shipping_methods_collection = db['shipping_methods']
 order_sources_collection = db['order_sources']
 payment_methods_collection = db['payment_methods']
+loyalty_collection = db['loyalty']
+notifications_collection = db['notifications']
 
 google_bp = make_google_blueprint(client_id='YOUR_GOOGLE_CLIENT_ID',
                                   client_secret='YOUR_GOOGLE_CLIENT_SECRET',
@@ -459,6 +461,7 @@ def add_client():
     telegram = data.get('telegram')
     comment = data.get('comment')
     status = data.get('status')
+    discount = data.get('discount', 0)
 
     # Fetch status document from collection
     status_doc = statuses_collection.find_one({'status': status}, {'_id': 0}) if status else None
@@ -479,7 +482,8 @@ def add_client():
         'comment': comment,
         'status': status_doc,
         'userpic': userpic,
-        'user_id': user_id
+        'user_id': user_id,
+        'discount': discount
     }
 
     # Check if client already exists
@@ -628,7 +632,7 @@ def update_client(client_id):
 
     if existing_client:
         # Update client fields if new data is provided in the request
-        for field in ['name', 'phone', 'additional_phone', 'email', 'gender', 'birthday', 'instagram', 'telegram', 'comment']:
+        for field in ['name', 'phone', 'additional_phone', 'email', 'gender', 'birthday', 'instagram', 'telegram', 'comment', 'discount']:
             if field in data:
                 existing_client[field] = data[field]
 
@@ -901,6 +905,28 @@ def add_order():
     # Get client details
     client = clients_collection.find_one({'email': client_email})
 
+    # Check loyalty
+    for variation in variations:
+        # Deduct in_stock in the variation itself (temporary, for order doc preparation)
+        variation_in_stock = variation.get('in_stock', 0) - variation.get('amount', 0)
+        variation['in_stock'] = max(0, variation_in_stock)  # Ensure in_stock doesn't go negative
+        # Assuming variation['_id'] is the unique identifier for the variation within the product
+        variation_id = variation.get('_id')
+        amount_ordered = variation.get('amount', 0)
+        # Find the product containing the variation and update the in_stock value for that variation
+        products_collection.update_one(
+            {'variations._id': variation_id},  # Match the product containing the variation
+            {'$inc': {'variations.$.in_stock': -amount_ordered}}  # Decrement the in_stock of the matched variation
+        )
+
+        loyalty = loyalty_collection.find_one({'user_id': user_id, 'category': variation['category'], 'date': datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)})
+        if loyalty is not None:
+            variation['price'] = (variation['price'] * loyalty['discount'] / 100)
+        elif loyalty is None:
+            client = clients_collection.find_one({'user_id': user_id, 'email': client['email']})
+            if client['discount'] != 0:
+                variation['price'] = (variation['price'] * client['discount'] / 100)
+
     # Calculate total sum
     total_sum = sum(variation['price'] * variation['amount'] for variation in variations)
     total_sum -= discount_sum
@@ -927,7 +953,11 @@ def add_order():
     # Check if order already exists
     existing_order = orders_collection.find_one(order_doc)
     if existing_order is None:
-        orders_collection.insert_one(order_doc)
+        new_order = orders_collection.insert_one(order_doc)
+
+        notification = {'text': 'Нове замовлення',
+                        'user_id': user_id}
+        notifications_collection.insert_one(notification)
 
     # Process payment if status is 'Оплачено'
     if status == 'Оплачено':
@@ -944,9 +974,14 @@ def add_order():
             'date': datetime.now(),
             'category': '',
             'comment': '',
-            'user_id': user_id
+            'user_id': user_id,
+            'order_id': str(new_order.inserted_id)
         }
         transactions_collection.insert_one(transaction)
+
+        notification = {'text': 'Нове оплачене замовлення',
+                        'user_id': user_id}
+        notifications_collection.insert_one(notification)
 
     return jsonify({'message': True}), 200
 
@@ -1000,7 +1035,7 @@ def update_order():
     orders_collection.update_one({'_id': ObjectId(order_id)}, {'$set': {'total_sum': total_sum}})
 
     # Process payment if status is 'Оплачено'
-    if order['status']['status'] == 'Оплачено':
+    if data.get('status') == 'Оплачено':
         cashier = cashiers_collection.find_one({'name': order['cashier'], 'user_id': user_id})
         balance = cashier.get('balance', 0)
         incomes = cashier.get('incomes', 0)
@@ -1014,9 +1049,38 @@ def update_order():
             'date': datetime.now(),
             'category': '',
             'comment': '',
-            'user_id': user_id
+            'user_id': user_id,
+            'order_id': order_id
         }
         transactions_collection.insert_one(transaction)
+
+        notification = {'text': 'Нове оплачене замовлення',
+                        'user_id': user_id}
+        notifications_collection.insert_one(notification)
+
+        # Process payment if status is 'Повернено'
+        if data.get('status') == 'Повернено':
+            cashier = cashiers_collection.find_one({'name': order['cashier'], 'user_id': user_id})
+            balance = cashier.get('balance', 0)
+            incomes = cashier.get('incomes', 0)
+            cashiers_collection.update_one({'_id': cashier['_id']}, {'$set': {'balance': balance - total_sum}})
+            cashiers_collection.update_one({'_id': cashier['_id']}, {'$set': {'incomes': incomes - total_sum}})
+            transaction = {
+                'type': "З рахунку",
+                'cashier': cashier['name'],
+                'sum': total_sum,
+                'counterpartie': '',
+                'date': datetime.now(),
+                'category': '',
+                'comment': '',
+                'user_id': user_id,
+                'order_id': order_id
+            }
+            transactions_collection.insert_one(transaction)
+
+            notification = {'text': 'Нове повернення',
+                            'user_id': user_id}
+            notifications_collection.insert_one(notification)
 
     return jsonify({'message': True}), 200
 
@@ -1137,6 +1201,8 @@ def add_task():
     participants = data.get('participants', None)
     responsible = data.get('responsible', None)
     deadline = data.get('deadline', None)
+    if deadline:
+        datetime.strptime(deadline, "%a %b %d %Y")
     status = data.get('status', None)
     if status:
         status_doc = statuses_collection.find_one({'status': status})
@@ -1146,10 +1212,8 @@ def add_task():
 
     # Get today's date
     today = datetime.today()
-    # Format the date
-    formatted_date = today.strftime("%a %b %d %Y")
 
-    document = {'date': formatted_date,
+    document = {'date': today,
                 'creator': creator,
                 'headline': headline,
                 'description': description,
@@ -1160,6 +1224,11 @@ def add_task():
                 'comment': comment,
                 'user_id': user_id}
     tasks_collection.insert_one(document)
+
+    notification = {'text': f'Нове завдання: {headline}. Дедлайн: {deadline}',
+                    'user_id': user_id}
+    notifications_collection.insert_one(notification)
+
     return jsonify({'message': True}), 200
 
 
@@ -1181,7 +1250,7 @@ def update_task():
     task['description'] = data.get('description', task['description'])
     task['participants'] = data.get('participants', task['participants'])
     task['responsible'] = data.get('responsible', task['responsible'])
-    deadline = data.get('deadline')
+    deadline = datetime.strptime(data.get('deadline'), "%a %b %d %Y")
     if deadline:
         task['deadline'] = deadline
     status = data.get('status')
@@ -1257,6 +1326,8 @@ def tasks():
     documents = list(tasks_collection.find(filter_criteria).skip(skip).limit(per_page))
     for document in documents:
         document['_id'] = str(document['_id'])
+        document['date'] = document['date'].strftime("%a %b %d %Y")
+        document['deadline'] = document['deadline'].strftime("%a %b %d %Y")
 
     sort_by = data.get('sort_by')
     if sort_by:
@@ -1698,7 +1769,7 @@ def add_transaction():
         cashier = data.get('cashier')
         amount = data.get('sum')
         counterpartie = data.get('counterpartie')
-        date = data.get('date')
+        date = datetime.strptime(data.get('date'), "%a %b %d %Y")
         category = data.get('category')
         comment = data.get('comment')
 
@@ -1742,7 +1813,7 @@ def add_transaction():
         cashier = data.get('cashier')
         amount = data.get('sum')
         counterpartie = data.get('counterpartie')
-        date = data.get('date')
+        date = datetime.strptime(data.get('date'), "%a %b %d %Y")
         category = data.get('category')
         comment = data.get('comment')
         periodicity = data.get('periodicity')
@@ -1805,7 +1876,7 @@ def update_transaction():
     transaction['counterpartie'] = data.get('counterpartie', transaction['counterpartie'])
     transaction['category'] = data.get('category', transaction['category'])
     transaction['comment'] = data.get('comment', transaction['comment'])
-    transaction['date'] = data.get('date', transaction['date'])
+    transaction['date'] = datetime.strptime(data.get('date', transaction['date']), "%a %b %d %Y")
 
     # Update the task in the database
     transactions_collection.update_one({'_id': ObjectId(transaction_id)}, {'$set': transaction})
@@ -1878,16 +1949,13 @@ def transactions():
     documents = list(transactions_collection.find(filter_criteria).skip(skip).limit(per_page))
     for document in documents:
         document['_id'] = str(document['_id'])
-        document['date'] = datetime.strptime(str(document['date']), "%a %b %d %Y")
+        document['date'] = document['date'].strftime("%a %b %d %Y")
 
     # Sorting logic
     sort_by = data.get('sort_by')
     if sort_by:
         reverse_sort = data.get('reverse_sort', False)
         documents = sorted(documents, key=lambda x: x.get(sort_by, 0), reverse=reverse_sort)
-
-    for document in documents:
-        document['date'] = document['date'].strftime("%a %b %d %Y")
 
     # Calculate the range of transactions being displayed
     start_range = skip + 1
@@ -2335,16 +2403,112 @@ def analytics():
     top_products = calculate_top_products(user_id, start_date, end_date, data.get('product_category'))
     purchase_segmentation = calculate_purchase_segmentation(data, user_id)
     mailing_history = get_mailing_history(data, user_id)
+    daily_analytics = calculate_daily_tasks_transactions_orders_sales(start_date, end_date, user_id)
 
     response_data = {
         **sales_info,
         **returns_info,
         'top_products': top_products,
         **purchase_segmentation,
-        'mailing_history': mailing_history
+        'mailing_history': mailing_history,
+        'daily_analytics': daily_analytics
     }
 
     return jsonify(response_data), 200
+
+
+def calculate_daily_tasks_transactions_orders_sales(start_date, end_date, user_id):
+    # Initialize a dictionary to hold day-by-day data
+    daily_data = {}
+    current_date = start_date
+    while current_date < end_date:
+        date_key = current_date.strftime('%Y-%m-%d')
+        daily_data[date_key] = {'orders': 0, 'sales': 0, 'active_tasks': 0, 'transactions': 0, 'products': 0}
+        current_date += timedelta(days=1)
+
+    # Query for orders and sales
+    orders_and_sales = orders_collection.aggregate([
+        {
+            '$match': {
+                'user_id': user_id,
+                'date': {'$gte': start_date, '$lt': end_date}
+            }
+        },
+        {
+            '$group': {
+                '_id': {
+                    'date': {'$dateToString': {'format': '%Y-%m-%d', 'date': '$date'}},
+                    'status': '$status.status'
+                },
+                'count': {'$sum': 1}
+            }
+        }
+    ])
+    for item in orders_and_sales:
+        date_key = item['_id']['date']
+        if item['_id']['status'] == 'Оплачено':
+            daily_data[date_key]['sales'] += item['count']
+        daily_data[date_key]['orders'] += item['count']
+
+    # Query specifically for transactions
+    transactions = transactions_collection.aggregate([
+        {
+            '$match': {
+                'user_id': user_id,
+                'date': {'$gte': start_date, '$lt': end_date}
+            }
+        },
+        {
+            '$group': {
+                '_id': {'$dateToString': {'format': '%Y-%m-%d', 'date': '$date'}},
+                'count': {'$sum': 1}
+            }
+        }
+    ])
+    for item in transactions:
+        date_key = item['_id']
+        daily_data[date_key]['transactions'] += item['count']
+
+    # Query specifically for products
+    products = products_collection.aggregate([
+        {
+            '$match': {
+                'user_id': user_id,
+                'date': {'$gte': start_date, '$lt': end_date}
+            }
+        },
+        {
+            '$group': {
+                '_id': {'$dateToString': {'format': '%Y-%m-%d', 'date': '$date'}},
+                'count': {'$sum': 1}
+            }
+        }
+    ])
+    for item in products:
+        date_key = item['_id']
+        daily_data[date_key]['products'] += item['count']
+
+    # Query specifically for active tasks
+    active_tasks = tasks_collection.aggregate([
+        {
+            '$match': {
+                'user_id': user_id,
+                'date': {'$gte': start_date, '$lt': end_date},
+                'status': {'$ne': 'Завершено'}
+            }
+        },
+        {
+            '$group': {
+                '_id': {'$dateToString': {'format': '%Y-%m-%d', 'date': '$date'}},
+                'count': {'$sum': 1}
+            }
+        }
+    ])
+    for item in active_tasks:
+        date_key = item['_id']
+        daily_data[date_key]['active_tasks'] += item['count']
+
+    return daily_data
 
 
 def calculate_sales_or_returns_info(user_id, start_date, end_date, status):
@@ -2709,6 +2873,181 @@ def delete_setting(request):
             return jsonify({'message': False}), 404
     else:
         return jsonify({'message': False}), 400
+
+
+@application.route('/quick_action', methods=['POST'])
+def quick_action():
+    data = request.get_json()
+    access_token = data.get('access_token')
+
+    # Check token validity
+    if not check_token(access_token):
+        return jsonify({'token': False}), 401
+
+    document_type = data.get('document_type')
+    action = data.get('action')
+    document_ids = data.get('document_ids', [])
+
+    # Convert document IDs to ObjectId
+    document_ids = [ObjectId(doc_id) for doc_id in document_ids]
+
+    # Map document types to their respective collections
+    collections = {
+        'clients': clients_collection,
+        'tasks': tasks_collection,
+        'finance': transactions_collection,
+        'warehouses': products_collection,
+        'orders': orders_collection
+    }
+
+    # Ensure valid document type
+    if document_type not in collections:
+        return jsonify({'message': False}), 400
+
+    collection = collections[document_type]
+
+    # Handle actions
+    if action in ['delete']:
+        delete_documents(collection, document_ids)
+    elif action in ['change_status', 'change_comment', 'change_responsible', 'change_deadline', 'change_participants',
+                    'change_cashier', 'change_counterpartie', 'change_sum', 'change_name', 'change_warehouse',
+                    'change_subwarehouse', 'change_category', 'change_client', 'change_source', 'change_shipping',
+                    'change_payment']:
+        if action == 'change_status':
+            status = data.get('status')
+            type = data.get('type')
+            status_doc = find_status_document(status, type)
+            update_documents(collection, document_ids, {'status': status_doc})
+        elif action in ['change_comment', 'change_responsible', 'change_deadline', 'change_participants',
+                        'change_cashier', 'change_counterpartie', 'change_name', 'change_warehouse',
+                        'change_subwarehouse', 'change_category', 'change_source', 'change_shipping', 'change_payment']:
+            update_field = action.split('_')[1]
+            update_documents(collection, document_ids, {update_field: data.get(update_field)})
+        elif action == 'change_client':
+            client = data.get('client')
+            update_documents(collection, document_ids,
+                             {'client': client, 'email': client['email'], 'gender': client['gender']})
+        elif action == 'change_sum':
+            # Custom handling for changing sum with additional logic
+            handle_change_sum(collection, document_ids, data.get('sum'))
+    else:
+        return jsonify({'message': False}), 400
+
+    return jsonify({'message': True}), 200
+
+
+def update_documents(collection, document_ids, update):
+    """Update documents in a specified collection."""
+    collection.update_many({'_id': {'$in': document_ids}}, {'$set': update})
+
+
+def delete_documents(collection, document_ids):
+    """Delete documents from a specified collection."""
+    collection.delete_many({'_id': {'$in': document_ids}})
+
+
+def find_status_document(status, type):
+    """Find a status document and remove its ID."""
+    status_doc = statuses_collection.find_one({'status': status, 'type': type})
+    if status_doc:
+        del status_doc['_id']
+    return status_doc
+
+
+def handle_change_sum(collection, document_ids, new_sum):
+    """
+    Update the sum for transactions and adjust the total_left accordingly.
+
+    Args:
+        collection: The MongoDB collection to operate on.
+        document_ids: List of document IDs to update.
+        new_sum: The new sum to apply to the transactions.
+    """
+    # Retrieve the current transactions to calculate the difference
+    transactions_old = list(collection.find({'_id': {'$in': document_ids}}, {'sum': 1, 'total_left': 1}))
+
+    # Update the transactions with the new sum
+    update_result = collection.update_many({'_id': {'$in': document_ids}}, {'$set': {'sum': new_sum}})
+
+    # Check if the transactions were successfully updated to proceed with adjustments
+    if update_result.modified_count > 0:
+        for transaction_old in transactions_old:
+            # Calculate the difference between the old and new sums
+            diff = transaction_old['sum'] - new_sum
+            # Adjust the total_left by adding the difference
+            # Assuming total_left is a field in the same document
+            collection.update_one({'_id': transaction_old['_id']}, {'$inc': {'total_left': diff}})
+
+
+@application.route('/add_loyalty', methods=['POST'])
+def add_loyalty():
+    data = request.get_json()
+    access_token = data.get('access_token')
+
+    # Check token validity
+    if not check_token(access_token):
+        return jsonify({'token': False}), 401
+
+    user_id = decode_access_token(access_token, SECRET_KEY).get('user_id')
+
+    date = datetime.strptime(data.get('date'), "%a %b %d %Y")
+    discount = data.get('discount')
+    category = data.get('category')
+
+    document = {'date': date,
+                'discount': discount,
+                'category': category,
+                'user_id': user_id}
+
+    loyalty_collection.insert_one(document)
+
+    notification = {'text': f'Знижка {discount}% на {category} почне діяти {date}',
+                    'user_id': user_id}
+    notifications_collection.insert_one(notification)
+
+    return jsonify({'message': True}), 200
+
+
+@application.route('/loyalty', methods=['POST'])
+def loyalty():
+    data = request.get_json()
+    access_token = data.get('access_token')
+
+    # Check token validity
+    if not check_token(access_token):
+        return jsonify({'token': False}), 401
+
+    user_id = decode_access_token(access_token, SECRET_KEY).get('user_id')
+
+    loyalty = list(loyalty_collection.find({'user_id': user_id}))
+    for document in loyalty:
+        document['_id'] = str(document['_id'])
+
+    return jsonify({'loyalty': loyalty}), 200
+
+
+@application.route('/delete_loyalty', methods=['POST'])
+def delete_loyalty():
+    data = request.get_json()
+    access_token = data.get('access_token')
+
+    # Check token validity
+    if not check_token(access_token):
+        return jsonify({'token': False}), 401
+
+    user_id = decode_access_token(access_token, SECRET_KEY).get('user_id')
+
+    loyalty_id = data.get('loyalty_id')
+
+    loyalty = loyalty_collection.find_one({'_id': ObjectId(loyalty_id)})
+
+    loyalty_collection.delete_one({'_id': ObjectId(loyalty_id)})
+
+    notification = {'text': f'Знижку {loyalty["discount"]}% на {loyalty["category"]} {loyalty["date"]} видалено',
+                    'user_id': user_id}
+    notifications_collection.insert_one(notification)
+
+    return jsonify({'message': True}), 200
 
 
 if __name__ == '__main__':
