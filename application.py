@@ -383,7 +383,7 @@ def forgot_password():
         users_collection.update_one({'email': email}, {'$set': {'reset_token': token}})
 
         msg = Message('Відновлення паролю', recipients=[email])
-        msg.body = f"Перейдіть за цим посиланням для відновлення паролю: https://goldfish-app-fplgr.ondigitalocean.app/reset_password?token={token}"
+        msg.body = f"Перейдіть за цим посиланням для відновлення паролю: https://size-crm.com/reset_password?token={token}"
         mail.send(msg)
 
         return jsonify({'message': True}), 200
