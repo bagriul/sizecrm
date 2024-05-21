@@ -383,7 +383,7 @@ def forgot_password():
         users_collection.update_one({'email': email}, {'$set': {'reset_token': token}})
 
         msg = Message('Відновлення паролю', recipients=[email])
-        msg.body = f"Перейдіть за цим посиланням для відновлення паролю: https://size-crm.com/reset_password?token={token}"
+        msg.body = f"Перейдіть за цим посиланням для відновлення паролю: http://127.0.0.1:5000/reset_password?token={token}"
         mail.send(msg)
 
         return jsonify({'message': True}), 200
@@ -897,7 +897,7 @@ def add_order():
     source = data.get('source')
     payment = data.get('payment')
     comment = data.get('comment')
-    variations = data.get('variations')
+    variation_ids = data.get('variation_ids', [])
     discount_sum = data.get('discount_sum', 0)
     discount_per = data.get('discount_per', 0)
     cashier = data.get('cashier')
@@ -905,18 +905,25 @@ def add_order():
     # Get client details
     client = clients_collection.find_one({'email': client_email})
 
-    # Check loyalty
+    # Retrieve variation details
+    variations = []
+    for variation_id in variation_ids:
+        product = products_collection.find_one({'variations._id': variation_id}, {'variations.$': 1})
+        if product and 'variations' in product:
+            variation = product['variations'][0]
+            variation['amount'] = data.get('amounts', {}).get(variation_id, 0)  # Get the amount for each variation
+            variations.append(variation)
+
+    # Check loyalty and update in_stock for each variation
     for variation in variations:
-        # Deduct in_stock in the variation itself (temporary, for order doc preparation)
         variation_in_stock = variation.get('in_stock', 0) - variation.get('amount', 0)
         variation['in_stock'] = max(0, variation_in_stock)  # Ensure in_stock doesn't go negative
-        # Assuming variation['_id'] is the unique identifier for the variation within the product
+
         variation_id = variation.get('_id')
         amount_ordered = variation.get('amount', 0)
-        # Find the product containing the variation and update the in_stock value for that variation
         products_collection.update_one(
-            {'variations._id': variation_id},  # Match the product containing the variation
-            {'$inc': {'variations.$.in_stock': -amount_ordered}}  # Decrement the in_stock of the matched variation
+            {'variations._id': variation_id},
+            {'$inc': {'variations.$.in_stock': -amount_ordered}}
         )
 
         loyalty = loyalty_collection.find_one({'user_id': user_id, 'category': variation['category'], 'date': datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)})
@@ -955,8 +962,7 @@ def add_order():
     if existing_order is None:
         new_order = orders_collection.insert_one(order_doc)
 
-        notification = {'text': 'Нове замовлення',
-                        'user_id': user_id}
+        notification = {'text': 'Нове замовлення', 'user_id': user_id}
         notifications_collection.insert_one(notification)
 
     # Process payment if status is 'Оплачено'
@@ -979,8 +985,7 @@ def add_order():
         }
         transactions_collection.insert_one(transaction)
 
-        notification = {'text': 'Нове оплачене замовлення',
-                        'user_id': user_id}
+        notification = {'text': 'Нове оплачене замовлення', 'user_id': user_id}
         notifications_collection.insert_one(notification)
 
     return jsonify({'message': True}), 200
