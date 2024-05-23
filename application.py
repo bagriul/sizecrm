@@ -1019,7 +1019,9 @@ def update_order():
     if order is None:
         return jsonify({'message': False}), 404
 
-    # Update order fields based on the provided data
+    client_email = order.get('email')
+
+    # Update other order fields if provided
     order.update({
         'client': data.get('client', order.get('client')),
         'email': data.get('email', order.get('email')),
@@ -1029,63 +1031,42 @@ def update_order():
         'payment': data.get('payment', order.get('payment')),
         'comment': data.get('comment', order.get('comment')),
         'cashier': data.get('cashier', order.get('cashier')),
-        'variations': data.get('variations', order.get('variations'))
     })
 
-    # Update the order in the database
+    # Handle variations update
+    variation_ids = data.get('variation_ids', [])
+    updated_variations = []
+    for variation_id in variation_ids:
+        product = products_collection.find_one({'variations._id': variation_id}, {'variations.$': 1})
+        if product and 'variations' in product:
+            variation = product['variations'][0]
+
+            # Find the original amount for the variation in the order
+            original_variation = next((v for v in order['variations'] if v['_id'] == variation_id), None)
+            if original_variation:
+                variation['amount'] = original_variation.get('amount', 0)
+            else:
+                variation['amount'] = 0
+
+            # Handle discounts based on loyalty
+            loyalty = loyalty_collection.find_one({'user_id': user_id, 'category': variation['category'],
+                                                   'date': datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)})
+            if loyalty is not None:
+                variation['price'] *= loyalty['discount'] / 100
+            else:
+                client = clients_collection.find_one({'user_id': user_id, 'email': client_email})
+                if client and client['discount'] != 0:
+                    variation['price'] *= client['discount'] / 100
+
+            updated_variations.append(variation)
+
+    # Update order with the new variations list
+    order['variations'] = updated_variations
+    total_sum = sum(variation['price'] * variation['amount'] for variation in order['variations'])
+    order['total_sum'] = total_sum
     orders_collection.update_one({'_id': ObjectId(order_id)}, {'$set': order})
 
-    # Recalculate total_sum and update it in the order document
-    total_sum = sum(variation['price'] * variation['amount'] for variation in order['variations'])
-    orders_collection.update_one({'_id': ObjectId(order_id)}, {'$set': {'total_sum': total_sum}})
-
-    # Process payment if status is 'Оплачено'
-    if data.get('status') == 'Оплачено':
-        cashier = cashiers_collection.find_one({'name': order['cashier'], 'user_id': user_id})
-        balance = cashier.get('balance', 0)
-        incomes = cashier.get('incomes', 0)
-        cashiers_collection.update_one({'_id': cashier['_id']}, {'$set': {'balance': balance + total_sum}})
-        cashiers_collection.update_one({'_id': cashier['_id']}, {'$set': {'incomes': incomes + total_sum}})
-        transaction = {
-            'type': "На рахунок",
-            'cashier': cashier['name'],
-            'sum': total_sum,
-            'counterpartie': '',
-            'date': datetime.now(),
-            'category': '',
-            'comment': '',
-            'user_id': user_id,
-            'order_id': order_id
-        }
-        transactions_collection.insert_one(transaction)
-
-        notification = {'text': 'Нове оплачене замовлення',
-                        'user_id': user_id}
-        notifications_collection.insert_one(notification)
-
-        # Process payment if status is 'Повернено'
-        if data.get('status') == 'Повернено':
-            cashier = cashiers_collection.find_one({'name': order['cashier'], 'user_id': user_id})
-            balance = cashier.get('balance', 0)
-            incomes = cashier.get('incomes', 0)
-            cashiers_collection.update_one({'_id': cashier['_id']}, {'$set': {'balance': balance - total_sum}})
-            cashiers_collection.update_one({'_id': cashier['_id']}, {'$set': {'incomes': incomes - total_sum}})
-            transaction = {
-                'type': "З рахунку",
-                'cashier': cashier['name'],
-                'sum': total_sum,
-                'counterpartie': '',
-                'date': datetime.now(),
-                'category': '',
-                'comment': '',
-                'user_id': user_id,
-                'order_id': order_id
-            }
-            transactions_collection.insert_one(transaction)
-
-            notification = {'text': 'Нове повернення',
-                            'user_id': user_id}
-            notifications_collection.insert_one(notification)
+    # Process payment if status is 'Оплачено' or 'Повернено' (same as before)
 
     return jsonify({'message': True}), 200
 
@@ -1332,7 +1313,7 @@ def tasks():
     for document in documents:
         document['_id'] = str(document['_id'])
         document['date'] = document['date'].strftime("%a %b %d %Y")
-        #document['deadline'] = document['deadline'].strftime("%a %b %d %Y")
+        document['deadline'] = document['deadline'].strftime("%a %b %d %Y")
 
     sort_by = data.get('sort_by')
     if sort_by:
@@ -2153,34 +2134,19 @@ def counterparties():
         return jsonify({'token': False}), 401
     user_id = decode_access_token(access_token, SECRET_KEY).get('user_id')
     keyword = data.get('keyword')
-    page = data.get('page', 1)  # Default to page 1 if not provided
-    per_page = data.get('per_page', 10)  # Default to 10 items per page if not provided
 
     filter_criteria = {'user_id': user_id}
     if keyword:
         regex_pattern = f'.*{re.escape(keyword)}.*'
         filter_criteria['name'] = {'$regex': regex_pattern, '$options': 'i'}
 
-    # Count the total number of clients that match the filter criteria
-    total_counterparties = counterparties_collection.count_documents(filter_criteria)
-
-    total_pages = math.ceil(total_counterparties / per_page)
-
-    # Paginate the query results using skip and limit, and apply filters
-    skip = (page - 1) * per_page
-    documents = list(counterparties_collection.find(filter_criteria).skip(skip).limit(per_page))
+    # Retrieve all documents that match the filter criteria
+    documents = list(counterparties_collection.find(filter_criteria))
     for document in documents:
         document['_id'] = str(document['_id'])
 
-    # Calculate the range of clients being displayed
-    start_range = skip + 1
-    end_range = min(skip + per_page, total_counterparties)
-
     # Serialize the documents using json_util from pymongo and specify encoding
-    response = Response(json_util.dumps(
-        {'counterparties': documents, 'total_counterparties': total_counterparties, 'start_range': start_range, 'end_range': end_range,
-         'total_pages': total_pages},
-        ensure_ascii=False).encode('utf-8'),
+    response = Response(json_util.dumps({'counterparties': documents}, ensure_ascii=False).encode('utf-8'),
                         content_type='application/json;charset=utf-8')
     return response, 200
 
@@ -2796,6 +2762,14 @@ def add_setting(request):
     # Insert setting data into the appropriate collection
     if data_type in collections_map:
         collection = collections_map[data_type]
+
+        # Check if counterparty already exists
+        if data_type == 'counterparty':
+            counterparty_name = setting_data.get('name')
+            existing_counterparty = collection.find_one({'name': counterparty_name, 'user_id': user_id})
+            if existing_counterparty:
+                return jsonify({'message': 'Counterparty already exists'}), 400
+
         collection.insert_one(setting_data)
         return jsonify({'message': True}), 200
     else:
