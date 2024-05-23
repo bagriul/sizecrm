@@ -1332,7 +1332,7 @@ def tasks():
     for document in documents:
         document['_id'] = str(document['_id'])
         document['date'] = document['date'].strftime("%a %b %d %Y")
-        document['deadline'] = document['deadline'].strftime("%a %b %d %Y")
+        #document['deadline'] = document['deadline'].strftime("%a %b %d %Y")
 
     sort_by = data.get('sort_by')
     if sort_by:
