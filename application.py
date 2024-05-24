@@ -1919,11 +1919,15 @@ def transactions():
     keyword = data.get('keyword')
     page = data.get('page', 1)  # Default to page 1 if not provided
     per_page = data.get('per_page', 10)  # Default to 10 items per page if not provided
+    archived = data.get('archived', False)  # Default to False if not provided
 
     filter_criteria = {'user_id': user_id}
     if keyword:
         regex_pattern = f'.*{re.escape(keyword)}.*'
         filter_criteria['comment'] = {'$regex': regex_pattern, '$options': 'i'}
+
+    if not archived:
+        filter_criteria['archived'] = {'$ne': True}
 
     # Count the total number of transactions that match the filter criteria
     total_transactions = transactions_collection.count_documents(filter_criteria)
@@ -2023,20 +2027,22 @@ def cashiers():
     keyword = data.get('keyword')
     page = data.get('page', 1)  # Default to page 1 if not provided
     per_page = data.get('per_page', 10)  # Default to 10 items per page if not provided
+    archived = data.get('archived', False)  # Default to False if not provided
 
     filter_criteria = {'user_id': user_id}
     if keyword:
         cashiers_collection.create_index([("$**", "text")])
         filter_criteria['$text'] = {'$search': keyword}
 
+    if not archived:
+        filter_criteria['archived'] = {'$ne': True}
+
     # Count the total number of clients that match the filter criteria
     total_cashiers = cashiers_collection.count_documents(filter_criteria)
-
     total_pages = math.ceil(total_cashiers / per_page)
 
     # Paginate the query results using skip and limit, and apply filters
     skip = (page - 1) * per_page
-    #documents = list(cashiers_collection.find(filter_criteria).skip(skip).limit(per_page))
 
     transactions = list(transactions_collection.find({'user_id': user_id}))
     cashiers = list(cashiers_collection.find({'user_id': user_id}))
@@ -2079,18 +2085,19 @@ def cashiers():
     start_range = skip + 1
     end_range = min(skip + per_page, total_cashiers)
 
-    cashiers = cashiers_collection.find()
+    cashiers = cashiers_collection.find({'user_id': user_id})
     total_incomes = 0
     total_expenses = 0
     for cashier in cashiers:
-        cashier['incomes'] += total_incomes
-        cashier['expenses'] += total_expenses
+        total_incomes += cashier.get('incomes', 0)
+        total_expenses += cashier.get('expenses', 0)
     total_balance = total_incomes - total_expenses
 
     # Serialize the documents using json_util from pymongo and specify encoding
     response = Response(json_util.dumps(
         {'cashiers': documents, 'total_cashiers': total_cashiers, 'start_range': start_range, 'end_range': end_range,
-         'total_pages': total_pages, 'total_balance': total_balance, 'total_incomes': total_incomes, 'total_expenses': total_expenses},
+         'total_pages': total_pages, 'total_balance': total_balance, 'total_incomes': total_incomes,
+         'total_expenses': total_expenses},
         ensure_ascii=False).encode('utf-8'),
                         content_type='application/json;charset=utf-8')
     return response, 200
@@ -3025,6 +3032,28 @@ def delete_loyalty():
     notification = {'text': f'Знижку {loyalty["discount"]}% на {loyalty["category"]} {loyalty["date"]} видалено',
                     'user_id': user_id}
     notifications_collection.insert_one(notification)
+
+    return jsonify({'message': True}), 200
+
+
+@application.route('/archive_cashier', methods=['POST'])
+def archive_cashier():
+    data = request.get_json()
+    access_token = data.get('access_token')
+
+    if not check_token(access_token):
+        return jsonify ({'token': False}), 401
+
+    cashier_id = data.get('cashier_id')
+    archive = data.get('archive', True)
+
+    user_id = decode_access_token(access_token, SECRET_KEY).get('user_id')
+    cashier = cashiers_collection.find_one({'_id': ObjectId(cashier_id)})
+    cashiers_collection.find_one_and_update(cashier,
+                                            {'$set': {'archived': archive}})
+    transactions = transactions_collection.find({'user_id': user_id, 'cashier': cashier['name']})
+    for transaction in transactions:
+        transactions_collection.find_one_and_update(transaction, {'$set': {'archived': archive}})
 
     return jsonify({'message': True}), 200
 
