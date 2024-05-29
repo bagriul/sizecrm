@@ -1147,6 +1147,16 @@ def delete_product_order():
     return jsonify({'message': True}), 200
 
 
+def convert_object_id(obj):
+    if isinstance(obj, list):
+        return [convert_object_id(item) for item in obj]
+    elif isinstance(obj, dict):
+        return {key: convert_object_id(value) for key, value in obj.items()}
+    elif isinstance(obj, ObjectId):
+        return str(obj)
+    else:
+        return obj
+
 @application.route('/order_info', methods=['POST'])
 def order_info():
     data = request.get_json()
@@ -1164,7 +1174,7 @@ def order_info():
 
     if order_document:
         # Convert ObjectId to string and format date before returning the response
-        order_document['_id'] = str(order_document['_id'])
+        order_document = convert_object_id(order_document)
         order_document['date'] = order_document['date'].strftime("%a %b %d %Y")
 
         # Return the order document as JSON with proper content type
@@ -1172,6 +1182,7 @@ def order_info():
     else:
         # Return a 404 response if the order is not found
         return jsonify({'message': 'Order not found'}), 404
+
 
 
 @application.route('/add_task', methods=['POST'])
@@ -3059,4 +3070,4 @@ def archive_cashier():
 
 
 if __name__ == '__main__':
-    application.run()
+    application.run(port=8000)
