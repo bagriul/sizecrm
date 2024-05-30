@@ -897,7 +897,7 @@ def add_order():
     source = data.get('source')
     payment = data.get('payment')
     comment = data.get('comment')
-    variation_ids = data.get('variation_ids', [])
+    variation_data = data.get('variations', [])
     discount_sum = data.get('discount_sum', 0)
     discount_per = data.get('discount_per', 0)
     cashier = data.get('cashier')
@@ -905,37 +905,55 @@ def add_order():
     # Get client details
     client = clients_collection.find_one({'email': client_email})
 
-    # Retrieve variation details
+    # Prepare variations list
     variations = []
-    for variation_id in variation_ids:
-        product = products_collection.find_one({'variations._id': variation_id}, {'variations.$': 1})
-        if product and 'variations' in product:
-            variation = product['variations'][0]
-            variation['amount'] = data.get('amounts', {}).get(variation_id, 0)  # Get the amount for each variation
-            variations.append(variation)
+    total_sum = 0
 
-    # Check loyalty and update in_stock for each variation
-    for variation in variations:
-        variation_in_stock = variation.get('in_stock', 0) - variation.get('amount', 0)
-        variation['in_stock'] = max(0, variation_in_stock)  # Ensure in_stock doesn't go negative
+    for var_data in variation_data:
+        variation_id = var_data.get('variation_id')
+        amount = var_data.get('amount', 0)
 
-        variation_id = variation.get('_id')
-        amount_ordered = variation.get('amount', 0)
-        products_collection.update_one(
-            {'variations._id': variation_id},
-            {'$inc': {'variations.$.in_stock': -amount_ordered}}
-        )
+        # Fetch product and its variation
+        product = products_collection.find_one({'variations._id': variation_id})
 
-        loyalty = loyalty_collection.find_one({'user_id': user_id, 'category': variation['category'], 'date': datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)})
-        if loyalty is not None:
-            variation['price'] = (variation['price'] * loyalty['discount'] / 100)
-        elif loyalty is None:
-            client = clients_collection.find_one({'user_id': user_id, 'email': client['email']})
-            if client['discount'] != 0:
-                variation['price'] = (variation['price'] * client['discount'] / 100)
+        if product:
+            for variation in product.get('variations', []):
+                if variation.get('_id') == variation_id:
+                    variation_data = {
+                        'size': variation.get('size'),
+                        'colour': variation.get('colour'),
+                        'price': variation.get('price'),
+                        'in_stock': variation.get('in_stock'),
+                        'photos': variation.get('photos'),
+                        'cost_price': variation.get('cost_price'),
+                        'amount': amount  # Include the amount here
+                    }
+                    variations.append(variation_data)
 
-    # Calculate total sum
-    total_sum = sum(variation['price'] * variation['amount'] for variation in variations)
+                    try:
+                        # Calculate price considering loyalty and client discounts
+                        loyalty = loyalty_collection.find_one({'user_id': user_id, 'category': product.get('category'),
+                                                               'date': datetime.utcnow().replace(hour=0, minute=0,
+                                                                                                 second=0,
+                                                                                                 microsecond=0)})
+                        if loyalty is not None:
+                            variation_data['price'] = (variation_data['price'] * (100 - loyalty['discount']) / 100)
+                        elif client['discount'] != 0:
+                            variation_data['price'] = (variation_data['price'] * (100 - client['discount']) / 100)
+                    except KeyError:
+                        pass
+
+                    # Calculate total sum for this variation
+                    total_sum += variation_data['price'] * amount
+
+                    # Update in_stock for this variation
+                    variation_in_stock = variation.get('in_stock', 0) - amount
+                    products_collection.update_one(
+                        {'variations._id': variation_id},
+                        {'$set': {'variations.$.in_stock': max(0, variation_in_stock)}}
+                    )
+
+    # Apply global discounts
     total_sum -= discount_sum
     total_sum -= (total_sum * discount_per / 100)
 
@@ -950,7 +968,7 @@ def add_order():
         'source': source,
         'payment': payment,
         'comment': comment,
-        'variations': variations,
+        'variations': variations,  # Ensure variations are populated here
         'discount_sum': discount_sum,
         'discount_per': discount_per,
         'total_sum': total_sum,
@@ -965,28 +983,28 @@ def add_order():
         notification = {'text': 'Нове замовлення', 'user_id': user_id}
         notifications_collection.insert_one(notification)
 
-    # Process payment if status is 'Оплачено'
-    if status == 'Оплачено':
-        cashier = cashiers_collection.find_one({'name': cashier, 'user_id': user_id})
-        balance = cashier.get('balance', 0)
-        incomes = cashier.get('incomes', 0)
-        cashiers_collection.update_one({'_id': cashier['_id']}, {'$set': {'balance': balance + total_sum}})
-        cashiers_collection.update_one({'_id': cashier['_id']}, {'$set': {'incomes': incomes + total_sum}})
-        transaction = {
-            'type': "На рахунок",
-            'cashier': cashier['name'],
-            'sum': total_sum,
-            'counterpartie': '',
-            'date': datetime.now(),
-            'category': '',
-            'comment': '',
-            'user_id': user_id,
-            'order_id': str(new_order.inserted_id)
-        }
-        transactions_collection.insert_one(transaction)
+        # Process payment if status is 'Оплачено'
+        if status == 'Оплачено':
+            cashier = cashiers_collection.find_one({'name': cashier, 'user_id': user_id})
+            balance = cashier.get('balance', 0)
+            incomes = cashier.get('incomes', 0)
+            cashiers_collection.update_one({'_id': cashier['_id']}, {'$set': {'balance': balance + total_sum}})
+            cashiers_collection.update_one({'_id': cashier['_id']}, {'$set': {'incomes': incomes + total_sum}})
+            transaction = {
+                'type': "На рахунок",
+                'cashier': cashier['name'],
+                'sum': total_sum,
+                'counterpartie': '',
+                'date': datetime.now(),
+                'category': '',
+                'comment': '',
+                'user_id': user_id,
+                'order_id': str(new_order.inserted_id)
+            }
+            transactions_collection.insert_one(transaction)
 
-        notification = {'text': 'Нове оплачене замовлення', 'user_id': user_id}
-        notifications_collection.insert_one(notification)
+            notification = {'text': 'Нове оплачене замовлення', 'user_id': user_id}
+            notifications_collection.insert_one(notification)
 
     return jsonify({'message': True}), 200
 
