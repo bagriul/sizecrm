@@ -1043,55 +1043,123 @@ def update_order():
         return jsonify({'message': False}), 404
 
     client_email = order.get('email')
+    client = clients_collection.find_one({'email': client_email})
+    try:
+        client_discount = client['discount']
+    except TypeError:
+        client_discount = 0
 
     # Update other order fields if provided
-    order.update({
-        'client': data.get('client', order.get('client')),
-        'email': data.get('email', order.get('email')),
-        'shipping': data.get('shipping', order.get('shipping')),
-        'status': statuses_collection.find_one({'status': data.get('status')}, {'_id': 0}) if 'status' in data else order.get('status'),
-        'source': data.get('source', order.get('source')),
-        'payment': data.get('payment', order.get('payment')),
-        'comment': data.get('comment', order.get('comment')),
-        'cashier': data.get('cashier', order.get('cashier')),
-    })
+    order['client'] = data.get('client', order.get('client'))
+    order['email'] = data.get('email', order.get('email'))
+    order['shipping'] = data.get('shipping', order.get('shipping'))
+    order['status'] = statuses_collection.find_one({'status': data.get('status')}, {'_id': 0}) if 'status' in data else order.get('status')
+    order['source'] = data.get('source', order.get('source'))
+    order['payment'] = data.get('payment', order.get('payment'))
+    order['comment'] = data.get('comment', order.get('comment'))
+    order['cashier'] = data.get('cashier', order.get('cashier'))
 
-    # Handle variations update
-    variation_ids = data.get('variation_ids', [])
-    updated_variations = []
-    for variation_id in variation_ids:
-        product = products_collection.find_one({'variations._id': variation_id}, {'variations.$': 1})
-        if product and 'variations' in product:
-            variation = product['variations'][0]
+    # Prepare variations list
+    variations_data = data.get('variations', [])
+    variations = []
+    total_sum = 0
 
-            # Find the original amount for the variation in the order
-            original_variation = next((v for v in order['variations'] if v['_id'] == variation_id), None)
-            if original_variation:
-                variation['amount'] = original_variation.get('amount', 0)
-            else:
-                variation['amount'] = 0
+    for var_data in variations_data:
+        variation_id = var_data.get('id')
+        amount = var_data.get('amount', 1)  # Default amount is 1 if not specified
 
-            # Handle discounts based on loyalty
-            loyalty = loyalty_collection.find_one({'user_id': user_id, 'category': variation['category'],
-                                                   'date': datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)})
-            if loyalty is not None:
-                variation['price'] *= loyalty['discount'] / 100
-            else:
-                client = clients_collection.find_one({'user_id': user_id, 'email': client_email})
-                if client and client['discount'] != 0:
-                    variation['price'] *= client['discount'] / 100
+        # Fetch product and its variation
+        product = products_collection.find_one({'variations._id': variation_id})
 
-            updated_variations.append(variation)
+        if product:
+            for variation in product.get('variations', []):
+                if variation.get('_id') == variation_id:
+                    variation_data = {
+                        '_id': variation.get('_id'),
+                        'name': product.get('name'),
+                        'size': variation.get('size'),
+                        'colour': variation.get('colour'),
+                        'price': variation.get('price'),
+                        'in_stock': variation.get('in_stock'),
+                        'photos': variation.get('photos'),
+                        'cost_price': variation.get('cost_price'),
+                        'amount': amount
+                    }
+                    variations.append(variation_data)
 
-    # Update order with the new variations list
-    order['variations'] = updated_variations
-    total_sum = sum(variation['price'] * variation['amount'] for variation in order['variations'])
+                    try:
+                        # Calculate price considering loyalty and client discounts
+                        loyalty = loyalty_collection.find_one({'user_id': user_id, 'category': product.get('category'),
+                                                               'date': datetime.utcnow().replace(hour=0, minute=0,
+                                                                                                 second=0,
+                                                                                                 microsecond=0)})
+                        if loyalty is not None:
+                            variation_data['price'] = (variation_data['price'] * (100 - loyalty['discount']) / 100)
+                        elif client_discount != 0:
+                            variation_data['price'] = (variation_data['price'] * (100 - client_discount) / 100)
+                    except KeyError:
+                        pass
+
+                    # Calculate total sum for this variation
+                    total_sum += variation_data['price'] * amount
+
+                    # Update in_stock for this variation
+                    variation_in_stock = variation.get('in_stock', 0) - amount
+                    products_collection.update_one(
+                        {'variations._id': variation_id},
+                        {'$set': {'variations.$.in_stock': max(0, variation_in_stock)}}
+                    )
+
+    # Apply global discounts
+    discount_sum = data.get('discount_sum', 0)
+    discount_per = data.get('discount_per', 0)
+    try:
+        total_sum -= discount_sum
+    except TypeError:
+        pass
+    try:
+        total_sum -= (total_sum * discount_per / 100)
+    except TypeError:
+        pass
+
+    # Update order document
+    order['variations'] = variations
+    order['discount_sum'] = discount_sum
+    order['discount_per'] = discount_per
     order['total_sum'] = total_sum
+
     orders_collection.update_one({'_id': ObjectId(order_id)}, {'$set': order})
 
-    # Process payment if status is 'Оплачено' or 'Повернено' (same as before)
+    # Process payment if status is 'Оплачено' or 'Повернено'
+    if order['status'] in ['Оплачено', 'Повернено']:
+        cashier = cashiers_collection.find_one({'name': order.get('cashier'), 'user_id': user_id})
+        balance = cashier.get('balance', 0)
+        incomes = cashier.get('incomes', 0)
+        if order['status'] == 'Оплачено':
+            cashiers_collection.update_one({'_id': cashier['_id']}, {'$set': {'balance': balance + total_sum}})
+            cashiers_collection.update_one({'_id': cashier['_id']}, {'$set': {'incomes': incomes + total_sum}})
+        elif order['status'] == 'Повернено':
+            cashiers_collection.update_one({'_id': cashier['_id']}, {'$set': {'balance': balance - total_sum}})
+            cashiers_collection.update_one({'_id': cashier['_id']}, {'$set': {'incomes': incomes - total_sum}})
+        transaction = {
+            'type': "На рахунок" if order['status'] == 'Оплачено' else "З рахунку",
+            'cashier': cashier['name'],
+            'sum': total_sum,
+            'counterpartie': '',
+            'date': datetime.now(),
+            'category': '',
+            'comment': '',
+            'user_id': user_id,
+            'order_id': str(order_id)
+        }
+        transactions_collection.insert_one(transaction)
+
+        notification_text = 'Нове оплачене замовлення' if order['status'] == 'Оплачено' else 'Повернене замовлення'
+        notification = {'text': notification_text, 'user_id': user_id}
+        notifications_collection.insert_one(notification)
 
     return jsonify({'message': True}), 200
+
 
 
 @application.route('/add_product_order', methods=['POST'])
