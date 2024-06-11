@@ -1312,6 +1312,9 @@ def task_info():
     if task_document:
         # Convert ObjectId to string before returning the response
         task_document['_id'] = str(task_document['_id'])
+        task_document['deadline'] = task_document['deadline'].strftime("%a %b %d %Y")
+        task_document['date'] = task_document['date'].strftime("%a %b %d %Y")
+
 
         # Use dumps() to handle ObjectId serialization
         return json.dumps(task_document, default=str), 200, {'Content-Type': 'application/json'}
@@ -1347,7 +1350,7 @@ def tasks():
     for document in documents:
         document['_id'] = str(document['_id'])
         document['date'] = document['date'].strftime("%a %b %d %Y")
-        #document['deadline'] = document['deadline'].strftime("%a %b %d %Y")
+        document['deadline'] = document['deadline'].strftime("%a %b %d %Y")
 
     sort_by = data.get('sort_by')
     if sort_by:
