@@ -1221,7 +1221,7 @@ def add_task():
     responsible = data.get('responsible', None)
     deadline = data.get('deadline', None)
     if deadline:
-        datetime.strptime(deadline, "%a %b %d %Y")
+        deadline = datetime.strptime(deadline, "%a %b %d %Y")
     status = data.get('status', None)
     if status:
         status_doc = statuses_collection.find_one({'status': status})
