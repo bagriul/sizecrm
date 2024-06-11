@@ -922,6 +922,7 @@ def add_order():
                 if variation.get('_id') == variation_id:
                     variation_data = {
                         '_id': variation.get('_id'),
+                        'name': product.get('name'),
                         'size': variation.get('size'),
                         'colour': variation.get('colour'),
                         'price': variation.get('price'),
