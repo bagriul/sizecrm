@@ -107,7 +107,9 @@ def verify_access_token(access_token):
                 name = user['name']
                 userpic = user['userpic']
                 role = user['role']
-                return jsonify({'user_id': user_id, 'name': name, 'userpic': userpic, 'role': role}), 200
+                email = user['email']
+                return jsonify({'user_id': user_id, 'name': name, 'userpic': userpic, 'role': role,
+                                'email': email}), 200
             # User is authenticated, proceed with processing the request
             else:
                 return jsonify({'message': 'User not found'}), 404
@@ -891,27 +893,26 @@ def add_order():
     user_id = decode_access_token(access_token, SECRET_KEY).get('user_id')
 
     # Extract order details from request data
+    client_name = data.get('client')
     client_email = data.get('email')
     shipping = data.get('shipping')
     status = data.get('status')
     source = data.get('source')
     payment = data.get('payment')
     comment = data.get('comment')
-    variation_data = data.get('variations', [])
-    discount_sum = data.get('discount_sum', 0)
-    discount_per = data.get('discount_per', 0)
     cashier = data.get('cashier')
+    variations_data = data.get('variations', [])
 
     # Get client details
-    client = clients_collection.find_one({'email': client_email})
+    client = clients_collection.find_one({'name': client_name, 'email': client_email})
 
     # Prepare variations list
     variations = []
     total_sum = 0
 
-    for var_data in variation_data:
-        variation_id = var_data.get('variation_id')
-        amount = var_data.get('amount', 0)
+    for var_data in variations_data:
+        variation_id = var_data.get('id')
+        amount = var_data.get('amount', 1)  # Default amount is 1 if not specified
 
         # Fetch product and its variation
         product = products_collection.find_one({'variations._id': variation_id})
@@ -920,13 +921,14 @@ def add_order():
             for variation in product.get('variations', []):
                 if variation.get('_id') == variation_id:
                     variation_data = {
+                        '_id': variation.get('_id'),
                         'size': variation.get('size'),
                         'colour': variation.get('colour'),
                         'price': variation.get('price'),
                         'in_stock': variation.get('in_stock'),
                         'photos': variation.get('photos'),
                         'cost_price': variation.get('cost_price'),
-                        'amount': amount  # Include the amount here
+                        'amount': amount
                     }
                     variations.append(variation_data)
 
@@ -954,6 +956,8 @@ def add_order():
                     )
 
     # Apply global discounts
+    discount_sum = data.get('discount_sum', 0)
+    discount_per = data.get('discount_per', 0)
     total_sum -= discount_sum
     total_sum -= (total_sum * discount_per / 100)
 
@@ -968,7 +972,7 @@ def add_order():
         'source': source,
         'payment': payment,
         'comment': comment,
-        'variations': variations,  # Ensure variations are populated here
+        'variations': variations,
         'discount_sum': discount_sum,
         'discount_per': discount_per,
         'total_sum': total_sum,
