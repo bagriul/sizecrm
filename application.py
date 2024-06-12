@@ -2459,7 +2459,10 @@ def new_telegram_list():
     tgID_list = []
     for document in documents:
         client = clients_collection.find_one({'email': document['email']})
-        tgID = client['tgID']
+        try:
+            tgID = client['tgID']
+        except TypeError:
+            continue
         if tgID not in tgID_list:
             tgID_list.append(tgID)
 
@@ -2485,7 +2488,7 @@ def analytics():
     returns_info = calculate_returns_info(user_id, start_date, end_date)
     top_products = calculate_top_products(user_id, start_date, end_date, data.get('product_category'))
     purchase_segmentation = calculate_purchase_segmentation(data, user_id)
-    mailing_history = get_mailing_history(data, user_id)
+    #mailing_history, total_documents = get_mailing_history(data, user_id)
     daily_analytics = calculate_daily_tasks_transactions_orders_sales(start_date, end_date, user_id)
 
     response_data = {
@@ -2493,8 +2496,27 @@ def analytics():
         **returns_info,
         'top_products': top_products,
         **purchase_segmentation,
-        'mailing_history': mailing_history,
         'daily_analytics': daily_analytics
+    }
+
+    return jsonify(response_data), 200
+
+
+@application.route('/mailing_history', methods=['POST'])
+def mailing_history():
+    data = request.get_json() or {}
+    access_token = data.get('access_token')
+
+    if not check_token(access_token):
+        return jsonify({'error': 'Invalid token'}), 401
+
+    user_id = decode_access_token(access_token, SECRET_KEY).get('user_id')
+
+    mailing_history, total_documents = get_mailing_history(data, user_id)
+
+    response_data = {
+        'mailing_history': mailing_history,
+        'total_documents': total_documents
     }
 
     return jsonify(response_data), 200
@@ -2723,16 +2745,25 @@ def calculate_purchase_segmentation(data, user_id):
 
 def get_mailing_history(data, user_id):
     mailing_type = data.get('mailing_type')
+    page = data.get('page', 1)
+    page_size = data.get('page_size', 10)
+
     filter_criteria = {'user_id': user_id}
     if mailing_type:
         filter_criteria['type'] = {'$regex': f'.*{re.escape(mailing_type)}.*', '$options': 'i'}
 
-    documents = list(mailing_history_collection.find(filter_criteria))
+    total_documents = mailing_history_collection.count_documents(filter_criteria)
+    documents = list(
+        mailing_history_collection.find(filter_criteria)
+        .skip((page - 1) * page_size)
+        .limit(page_size)
+    )
+
     # Convert ObjectIds to strings for JSON serialization
     for doc in documents:
         doc['_id'] = str(doc['_id'])
 
-    return documents
+    return documents, total_documents
 
 
 @application.route('/all_variations', methods=['POST'])
