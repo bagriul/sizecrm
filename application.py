@@ -722,7 +722,12 @@ def get_statuses():
     user_id = decode_access_token(access_token, SECRET_KEY).get('user_id')
 
     # Prepare filter criteria based on user_id and type
-    filter_criteria = {'user_id': user_id}
+    filter_criteria = {
+        '$or': [
+            {'user_id': user_id},
+            {'user_id': "0"}
+        ]
+    }
     if type:
         filter_criteria['type'] = type
 
