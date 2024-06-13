@@ -2467,6 +2467,8 @@ def new_telegram_list():
             tgID = client['tgID']
         except TypeError:
             continue
+        except KeyError:
+            continue
         if tgID not in tgID_list:
             tgID_list.append(tgID)
 
