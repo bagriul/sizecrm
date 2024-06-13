@@ -1049,6 +1049,8 @@ def update_order():
         client_discount = client['discount']
     except KeyError:
         client_discount = 0
+    except TypeError:
+        client_discount = 0
 
     # Update other order fields if provided
     order['client'] = data.get('client', order.get('client'))
@@ -1078,6 +1080,7 @@ def update_order():
                     variation_data = {
                         '_id': variation.get('_id'),
                         'name': product.get('name'),
+                        'category': product.get('category'),
                         'size': variation.get('size'),
                         'colour': variation.get('colour'),
                         'price': variation.get('price'),
