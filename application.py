@@ -923,6 +923,7 @@ def add_order():
                     variation_data = {
                         '_id': variation.get('_id'),
                         'name': product.get('name'),
+                        'category': product.get('category'),
                         'size': variation.get('size'),
                         'colour': variation.get('colour'),
                         'price': variation.get('price'),
@@ -1046,7 +1047,7 @@ def update_order():
     client = clients_collection.find_one({'email': client_email})
     try:
         client_discount = client['discount']
-    except TypeError:
+    except KeyError:
         client_discount = 0
 
     # Update other order fields if provided
