@@ -914,6 +914,7 @@ def add_order():
     # Prepare variations list
     variations = []
     total_sum = 0
+    in_stock_errors = []
 
     for var_data in variations_data:
         variation_id = var_data.get('id')
@@ -937,30 +938,40 @@ def add_order():
                         'cost_price': variation.get('cost_price'),
                         'amount': amount
                     }
-                    variations.append(variation_data)
 
-                    try:
-                        # Calculate price considering loyalty and client discounts
-                        loyalty = loyalty_collection.find_one({'user_id': user_id, 'category': product.get('category'),
-                                                               'date': datetime.utcnow().replace(hour=0, minute=0,
-                                                                                                 second=0,
-                                                                                                 microsecond=0)})
-                        if loyalty is not None:
-                            variation_data['price'] = (variation_data['price'] * (100 - loyalty['discount']) / 100)
-                        elif client['discount'] != 0:
-                            variation_data['price'] = (variation_data['price'] * (100 - client['discount']) / 100)
-                    except KeyError:
-                        pass
+                    if variation_data['in_stock'] < amount:
+                        in_stock_errors.append({
+                            'variation_id': variation_data['_id'],
+                            'error': f'Not enough stock. Available: {variation_data["in_stock"]}'
+                        })
+                    else:
+                        variations.append(variation_data)
 
-                    # Calculate total sum for this variation
-                    total_sum += variation_data['price'] * amount
+                        try:
+                            # Calculate price considering loyalty and client discounts
+                            loyalty = loyalty_collection.find_one({'user_id': user_id, 'category': product.get('category'),
+                                                                   'date': datetime.utcnow().replace(hour=0, minute=0,
+                                                                                                     second=0,
+                                                                                                     microsecond=0)})
+                            if loyalty is not None:
+                                variation_data['price'] = (variation_data['price'] * (100 - loyalty['discount']) / 100)
+                            elif client['discount'] != 0:
+                                variation_data['price'] = (variation_data['price'] * (100 - client['discount']) / 100)
+                        except KeyError:
+                            pass
 
-                    # Update in_stock for this variation
-                    variation_in_stock = variation.get('in_stock', 0) - amount
-                    products_collection.update_one(
-                        {'variations._id': variation_id},
-                        {'$set': {'variations.$.in_stock': max(0, variation_in_stock)}}
-                    )
+                        # Calculate total sum for this variation
+                        total_sum += variation_data['price'] * amount
+
+                        # Update in_stock for this variation
+                        variation_in_stock = variation.get('in_stock', 0) - amount
+                        products_collection.update_one(
+                            {'variations._id': variation_id},
+                            {'$set': {'variations.$.in_stock': max(0, variation_in_stock)}}
+                        )
+
+    if in_stock_errors:
+        return jsonify({'errors': in_stock_errors}), 400
 
     # Apply global discounts
     discount_sum = data.get('discount_sum', 0)
@@ -983,6 +994,7 @@ def add_order():
         'discount_sum': discount_sum,
         'discount_per': discount_per,
         'total_sum': total_sum,
+        'cashier': cashier,
         'user_id': user_id
     }
 
@@ -2757,7 +2769,7 @@ def calculate_purchase_segmentation(data, user_id):
 def get_mailing_history(data, user_id):
     mailing_type = data.get('mailing_type')
     page = data.get('page', 1)
-    page_size = data.get('page_size', 10)
+    per_page = data.get('per_page', 10)
 
     filter_criteria = {'user_id': user_id}
     if mailing_type:
@@ -2766,8 +2778,8 @@ def get_mailing_history(data, user_id):
     total_documents = mailing_history_collection.count_documents(filter_criteria)
     documents = list(
         mailing_history_collection.find(filter_criteria)
-        .skip((page - 1) * page_size)
-        .limit(page_size)
+        .skip((page - 1) * per_page)
+        .limit(per_page)
     )
 
     # Convert ObjectIds to strings for JSON serialization
