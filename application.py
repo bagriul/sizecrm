@@ -1152,35 +1152,44 @@ def update_order():
     orders_collection.update_one({'_id': ObjectId(order_id)}, {'$set': order})
 
     # Process payment if status is 'Оплачено' or 'Повернено'
-    if order['status'] in ['Оплачено', 'Повернено']:
+    if data.get("status") in ['Оплачено', 'Повернено']:
         cashier = cashiers_collection.find_one({'name': order.get('cashier'), 'user_id': user_id})
-        balance = cashier.get('balance', 0)
-        incomes = cashier.get('incomes', 0)
-        if order['status'] == 'Оплачено':
-            cashiers_collection.update_one({'_id': cashier['_id']}, {'$set': {'balance': balance + total_sum}})
-            cashiers_collection.update_one({'_id': cashier['_id']}, {'$set': {'incomes': incomes + total_sum}})
-        elif order['status'] == 'Повернено':
-            cashiers_collection.update_one({'_id': cashier['_id']}, {'$set': {'balance': balance - total_sum}})
-            cashiers_collection.update_one({'_id': cashier['_id']}, {'$set': {'incomes': incomes - total_sum}})
-        transaction = {
-            'type': "На рахунок" if order['status'] == 'Оплачено' else "З рахунку",
-            'cashier': cashier['name'],
-            'sum': total_sum,
-            'counterpartie': '',
-            'date': datetime.now(),
-            'category': '',
-            'comment': '',
-            'user_id': user_id,
-            'order_id': str(order_id)
-        }
-        transactions_collection.insert_one(transaction)
+        if cashier:
+            balance = cashier.get('balance', 0)
+            incomes = cashier.get('incomes', 0)
+            # Update balance and incomes based on status
+            if data.get("status") == 'Оплачено':
+                new_balance = balance + total_sum
+                new_incomes = incomes + total_sum
+                cashiers_collection.update_one({'_id': cashier['_id']},
+                                               {'$set': {'balance': new_balance, 'incomes': new_incomes}})
+            elif data.get("status") == 'Повернено':
+                new_balance = balance - total_sum
+                new_incomes = incomes - total_sum
+                cashiers_collection.update_one({'_id': cashier['_id']},
+                                               {'$set': {'balance': new_balance, 'incomes': new_incomes}})
 
-        notification_text = 'Нове оплачене замовлення' if order['status'] == 'Оплачено' else 'Повернене замовлення'
-        notification = {'text': notification_text, 'user_id': user_id}
-        notifications_collection.insert_one(notification)
+            # Record the transaction
+            transaction = {
+                'type': "На рахунок" if data.get("status") == 'Оплачено' else "З рахунку",
+                'cashier': cashier['name'],
+                'sum': total_sum,
+                'counterpartie': '',
+                'date': datetime.now(),
+                'category': '',
+                'comment': '',
+                'user_id': user_id,
+                'order_id': str(order_id)
+            }
+            transactions_collection.insert_one(transaction)
+
+            # Create a notification
+            notification_text = 'Нове оплачене замовлення' if data.get(
+                "status") == 'Оплачено' else 'Повернене замовлення'
+            notification = {'text': notification_text, 'user_id': user_id}
+            notifications_collection.insert_one(notification)
 
     return jsonify({'message': True}), 200
-
 
 
 @application.route('/add_product_order', methods=['POST'])
@@ -2502,10 +2511,20 @@ def analytics():
 
     try:
         user_id = decode_access_token(access_token, SECRET_KEY).get('user_id')
-        start_date = datetime.strptime(data.get('start_date'), "%a %b %d %Y")
-        end_date = datetime.strptime(data.get('end_date'), "%a %b %d %Y") + timedelta(days=1)
+
+        start_date = data.get('start_date', '')
+        end_date = data.get('end_date', '')
+        start_date = datetime.strptime(start_date, "%a %b %d %Y")
+        end_date = datetime.strptime(end_date, "%a %b %d %Y") + timedelta(days=1)
     except (TypeError, ValueError) as e:
-        return jsonify({'error': 'Invalid date format'}), 400
+        response_data = {
+            'sales_info': None,
+            'returns_info': None,
+            'top_products': None,
+            'purchase_segmentation': None,
+            'daily_analytics': None
+        }
+        return jsonify(response_data), 200
 
     sales_info = calculate_sales_info(user_id, start_date, end_date)
     returns_info = calculate_returns_info(user_id, start_date, end_date)
