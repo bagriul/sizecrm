@@ -243,7 +243,9 @@ def register():
         'password': hashed_password,
         'password2': hashed_password,
         'userpic': default_userpic,
-        'role': 'all'
+        'role': 'all',
+        'subscription': True,
+        'subscription_end_date': datetime.today() + timedelta(days=30)
     }
 
     is_present = users_collection.find_one({'email': email})
@@ -1057,6 +1059,7 @@ def update_order():
 
     order_id = data.get('order_id')
     order = orders_collection.find_one({'_id': ObjectId(order_id)})
+    total_sum = order.get('total_sum')
     if order is None:
         return jsonify({'message': False}), 404
 
@@ -1081,70 +1084,76 @@ def update_order():
 
     # Prepare variations list
     variations_data = data.get('variations', [])
-    variations = []
-    total_sum = 0
+    if variations_data:
+        variations = []
+        total_sum = 0
 
-    for var_data in variations_data:
-        variation_id = var_data.get('id')
-        amount = var_data.get('amount', 1)  # Default amount is 1 if not specified
+        for var_data in variations_data:
+            variation_id = var_data.get('id')
+            amount = var_data.get('amount', 1)  # Default amount is 1 if not specified
 
-        # Fetch product and its variation
-        product = products_collection.find_one({'variations._id': variation_id})
+            # Fetch product and its variation
+            product = products_collection.find_one({'variations._id': variation_id})
 
-        if product:
-            for variation in product.get('variations', []):
-                if variation.get('_id') == variation_id:
-                    variation_data = {
-                        '_id': variation.get('_id'),
-                        'name': product.get('name'),
-                        'category': product.get('category'),
-                        'size': variation.get('size'),
-                        'colour': variation.get('colour'),
-                        'price': variation.get('price'),
-                        'in_stock': variation.get('in_stock'),
-                        'photos': variation.get('photos'),
-                        'cost_price': variation.get('cost_price'),
-                        'amount': amount
-                    }
-                    variations.append(variation_data)
+            if product:
+                for variation in product.get('variations', []):
+                    if variation.get('_id') == variation_id:
+                        variation_data = {
+                            '_id': variation.get('_id'),
+                            'name': product.get('name'),
+                            'category': product.get('category'),
+                            'size': variation.get('size'),
+                            'colour': variation.get('colour'),
+                            'price': variation.get('price'),
+                            'in_stock': variation.get('in_stock'),
+                            'photos': variation.get('photos'),
+                            'cost_price': variation.get('cost_price'),
+                            'amount': amount
+                        }
+                        variations.append(variation_data)
 
-                    try:
-                        # Calculate price considering loyalty and client discounts
-                        loyalty = loyalty_collection.find_one({'user_id': user_id, 'category': product.get('category'),
-                                                               'date': datetime.utcnow().replace(hour=0, minute=0,
-                                                                                                 second=0,
-                                                                                                 microsecond=0)})
-                        if loyalty is not None:
-                            variation_data['price'] = (variation_data['price'] * (100 - loyalty['discount']) / 100)
-                        elif client_discount != 0:
-                            variation_data['price'] = (variation_data['price'] * (100 - client_discount) / 100)
-                    except KeyError:
-                        pass
+                        try:
+                            # Calculate price considering loyalty and client discounts
+                            loyalty = loyalty_collection.find_one(
+                                {'user_id': user_id, 'category': product.get('category'),
+                                 'date': datetime.utcnow().replace(hour=0, minute=0,
+                                                                   second=0,
+                                                                   microsecond=0)})
+                            if loyalty is not None:
+                                variation_data['price'] = (variation_data['price'] * (100 - loyalty['discount']) / 100)
+                            elif client_discount != 0:
+                                variation_data['price'] = (variation_data['price'] * (100 - client_discount) / 100)
+                        except KeyError:
+                            pass
 
-                    # Calculate total sum for this variation
-                    total_sum += variation_data['price'] * amount
+                        # Calculate total sum for this variation
+                        total_sum += variation_data['price'] * amount
 
-                    # Update in_stock for this variation
-                    variation_in_stock = variation.get('in_stock', 0) - amount
-                    products_collection.update_one(
-                        {'variations._id': variation_id},
-                        {'$set': {'variations.$.in_stock': max(0, variation_in_stock)}}
-                    )
+                        # Update in_stock for this variation
+                        variation_in_stock = variation.get('in_stock', 0) - amount
+                        products_collection.update_one(
+                            {'variations._id': variation_id},
+                            {'$set': {'variations.$.in_stock': max(0, variation_in_stock)}}
+                        )
 
     # Apply global discounts
     discount_sum = data.get('discount_sum', 0)
     discount_per = data.get('discount_per', 0)
+    print(total_sum)
     try:
-        total_sum -= discount_sum
+        if discount_sum != 0:
+            total_sum -= discount_sum
     except TypeError:
         pass
     try:
-        total_sum -= (total_sum * discount_per / 100)
+        if discount_per != 0:
+            total_sum -= (total_sum * discount_per / 100)
     except TypeError:
         pass
 
     # Update order document
-    order['variations'] = variations
+    if variations_data:
+        order['variations'] = variations
     order['discount_sum'] = discount_sum
     order['discount_per'] = discount_per
     order['total_sum'] = total_sum
@@ -2080,7 +2089,10 @@ def transactions():
     sort_by = data.get('sort_by')
     if sort_by:
         reverse_sort = data.get('reverse_sort', False)
-        documents = sorted(documents, key=lambda x: x.get(sort_by, 0), reverse=reverse_sort)
+        if sort_by == 'date':
+            documents = sorted(documents, key=lambda x: datetime.strptime(x['date'], "%a %b %d %Y"), reverse=reverse_sort)
+        else:
+            documents = sorted(documents, key=lambda x: x.get(sort_by, 0), reverse=reverse_sort)
 
     # Calculate the range of transactions being displayed
     start_range = skip + 1
@@ -3086,7 +3098,10 @@ def quick_action():
                         'change_cashier', 'change_counterpartie', 'change_name', 'change_warehouse',
                         'change_subwarehouse', 'change_category', 'change_source', 'change_shipping', 'change_payment']:
             update_field = action.split('_')[1]
-            update_documents(collection, document_ids, {update_field: data.get(update_field)})
+            update_value = data.get(update_field)
+            if action == 'change_deadline':
+                update_value = datetime.strptime(update_value, "%a %b %d %Y")
+            update_documents(collection, document_ids, {update_field: update_value})
         elif action == 'change_client':
             client = data.get('client')
             update_documents(collection, document_ids,
