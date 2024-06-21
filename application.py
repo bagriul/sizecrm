@@ -245,7 +245,7 @@ def register():
         'userpic': default_userpic,
         'role': 'all',
         'subscription': True,
-        'subscription_end_date': datetime.today() + timedelta(days=30)
+        'subscription_end': datetime.today() + timedelta(days=30)
     }
 
     is_present = users_collection.find_one({'email': email})
@@ -2670,35 +2670,62 @@ def calculate_daily_tasks_transactions_orders_sales(start_date, end_date, user_i
     return daily_data
 
 
-def calculate_sales_or_returns_info(user_id, start_date, end_date, status):
+def calculate_sales_or_returns_info(user_id, start_date, end_date):
     filter_criteria = {
         'user_id': user_id,
         'date': {"$gte": start_date, "$lt": end_date},
-        'status.status': status
+        'status.status': {'$in': ['Оплачено', 'Повернено', 'Скасовано']}
     }
     documents = list(orders_collection.find(filter_criteria))
-    total_sum = sum(doc['total_sum'] for doc in documents)
-    document_count = len(documents)
-    average_check = total_sum / document_count if document_count else 0
-    daily_info = {}
+
+    sales_total_sum = returns_total_sum = canceled_total_sum = 0
+    sales_count = returns_count = canceled_count = 0
+    sales_daily_info = {}
+    returns_daily_info = {}
+    canceled_daily_info = {}
 
     for doc in documents:
         date_key = doc['date'].strftime('%Y-%m-%d')
-        if date_key not in daily_info:
-            daily_info[date_key] = {'total_sum': 0, 'count': 0}
-        daily_info[date_key]['total_sum'] += doc['total_sum']
-        daily_info[date_key]['count'] += 1
+        status = doc['status']['status']
+        if status == 'Оплачено':
+            sales_total_sum += doc['total_sum']
+            sales_count += 1
+            if date_key not in sales_daily_info:
+                sales_daily_info[date_key] = {'total_sum': 0, 'count': 0}
+            sales_daily_info[date_key]['total_sum'] += doc['total_sum']
+            sales_daily_info[date_key]['count'] += 1
+        elif status == 'Повернено':
+            returns_total_sum += doc['total_sum']
+            returns_count += 1
+            if date_key not in returns_daily_info:
+                returns_daily_info[date_key] = {'total_sum': 0, 'count': 0}
+            returns_daily_info[date_key]['total_sum'] += doc['total_sum']
+            returns_daily_info[date_key]['count'] += 1
+        elif status == 'Скасовано':
+            canceled_total_sum += doc['total_sum']
+            canceled_count += 1
+            if date_key not in canceled_daily_info:
+                canceled_daily_info[date_key] = {'total_sum': 0, 'count': 0}
+            canceled_daily_info[date_key]['total_sum'] += doc['total_sum']
+            canceled_daily_info[date_key]['count'] += 1
 
-    if status == 'Оплачено':
-        result_key_prefix = 'sales'
-    else:  # Assume 'Повернено' for returns
-        result_key_prefix = 'returns'
+    sales_average_check = sales_total_sum / sales_count if sales_count else 0
+    returns_average_check = returns_total_sum / returns_count if returns_count else 0
+    canceled_average_check = canceled_total_sum / canceled_count if canceled_count else 0
 
     return {
-        f'{result_key_prefix}_total_sum': total_sum,
-        f'{result_key_prefix}_average_check': average_check,
-        f'{result_key_prefix}_amount': document_count,
-        f'daily_{result_key_prefix}_info': daily_info
+        'sales_total_sum': sales_total_sum,
+        'sales_average_check': sales_average_check,
+        'sales_amount': sales_count,
+        'daily_sales_info': sales_daily_info,
+        'returns_total_sum': returns_total_sum,
+        'returns_average_check': returns_average_check,
+        'returns_amount': returns_count,
+        'daily_returns_info': returns_daily_info,
+        'canceled_total_sum': canceled_total_sum,
+        'canceled_average_check': canceled_average_check,
+        'canceled_amount': canceled_count,
+        'daily_canceled_info': canceled_daily_info
     }
 
 
@@ -3249,6 +3276,26 @@ def archive_cashier():
         transactions_collection.find_one_and_update(transaction, {'$set': {'archived': archive}})
 
     return jsonify({'message': True}), 200
+
+
+@application.route('/profile', methods=['POST'])
+def profile():
+    data = request.get_json()
+    access_token = data.get('access_token')
+
+    if not check_token(access_token):
+        return jsonify({'token': False}), 401
+
+    user_id = decode_access_token(access_token, SECRET_KEY).get('user_id')
+    user = users_collection.find_one({'_id': ObjectId(user_id)})
+    user['_id'] = str(user['_id'])
+    try:
+        user['subscription_end'] = datetime.strftime(user['subscription_end'], "%a %b %d %Y")
+    except KeyError:
+        pass
+
+    return jsonify({'user': user}), 200
+
 
 
 if __name__ == '__main__':
