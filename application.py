@@ -3140,8 +3140,9 @@ def quick_action():
             update_documents(collection, document_ids, {update_field: update_value})
         elif action == 'change_client':
             client = data.get('client')
+            client_document = clients_collection.find_one({'name': client})
             update_documents(collection, document_ids,
-                             {'client': client, 'email': client['email'], 'gender': client['gender']})
+                             {'client': client, 'email': client_document['email'], 'gender': client_document['gender']})
         elif action == 'change_sum':
             # Custom handling for changing sum with additional logic
             handle_change_sum(collection, document_ids, data.get('sum'))
