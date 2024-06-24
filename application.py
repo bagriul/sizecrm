@@ -2730,11 +2730,11 @@ def calculate_sales_or_returns_info(user_id, start_date, end_date):
 
 
 def calculate_sales_info(user_id, start_date, end_date):
-    return calculate_sales_or_returns_info(user_id, start_date, end_date, 'Оплачено')
+    return calculate_sales_or_returns_info(user_id, start_date, end_date)
 
 
 def calculate_returns_info(user_id, start_date, end_date):
-    return calculate_sales_or_returns_info(user_id, start_date, end_date, 'Повернено')
+    return calculate_sales_or_returns_info(user_id, start_date, end_date)
 
 
 def calculate_top_products(user_id, start_date, end_date, category=None):
