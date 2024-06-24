@@ -3120,10 +3120,19 @@ def quick_action():
             status = data.get('status')
             type = data.get('type')
             status_doc = find_status_document(status, type)
+
+            # Check for orders with status "Оплачено"
+            if document_type == 'orders':
+                paid_orders = list(collection.find({'_id': {'$in': document_ids}, 'status.status': 'Оплачено'}))
+                if paid_orders:
+                    paid_order_ids = [str(order['_id']) for order in paid_orders]
+                    return jsonify({'error': 'Cannot change status of paid orders', 'ids': paid_order_ids}), 400
+
             update_documents(collection, document_ids, {'status': status_doc})
         elif action in ['change_comment', 'change_responsible', 'change_deadline', 'change_participants',
                         'change_cashier', 'change_counterpartie', 'change_name', 'change_warehouse',
-                        'change_subwarehouse', 'change_category', 'change_source', 'change_shipping', 'change_payment']:
+                        'change_subwarehouse', 'change_category', 'change_source', 'change_shipping',
+                        'change_payment']:
             update_field = action.split('_')[1]
             update_value = data.get(update_field)
             if action == 'change_deadline':
