@@ -2524,10 +2524,22 @@ def analytics():
     try:
         user_id = decode_access_token(access_token, SECRET_KEY).get('user_id')
 
-        start_date = data.get('start_date', '')
-        end_date = data.get('end_date', '')
-        start_date = datetime.strptime(start_date, "%a %b %d %Y")
-        end_date = datetime.strptime(end_date, "%a %b %d %Y") + timedelta(days=1)
+        date_str = data.get('date', '')
+        start_date_str = data.get('start_date', '')
+        end_date_str = data.get('end_date', '')
+
+        if date_str:
+            start_date = datetime.strptime(date_str, "%a %b %d %Y")
+            end_date = start_date + timedelta(days=1)
+        elif start_date_str and not end_date_str:
+            start_date = datetime.strptime(start_date_str, "%a %b %d %Y")
+            end_date = start_date + timedelta(days=1)
+        elif end_date_str and not start_date_str:
+            end_date = datetime.strptime(end_date_str, "%a %b %d %Y") + timedelta(days=1)
+            start_date = end_date - timedelta(days=1)
+        else:
+            start_date = datetime.strptime(start_date_str, "%a %b %d %Y")
+            end_date = datetime.strptime(end_date_str, "%a %b %d %Y") + timedelta(days=1)
     except (TypeError, ValueError) as e:
         response_data = {
             'sales_info': None,
@@ -2542,7 +2554,6 @@ def analytics():
     returns_info = calculate_returns_info(user_id, start_date, end_date)
     top_products = calculate_top_products(user_id, start_date, end_date, data.get('product_category'))
     purchase_segmentation = calculate_purchase_segmentation(data, user_id)
-    #mailing_history, total_documents = get_mailing_history(data, user_id)
     daily_analytics = calculate_daily_tasks_transactions_orders_sales(start_date, end_date, user_id)
 
     response_data = {
@@ -2577,7 +2588,6 @@ def mailing_history():
 
 
 def calculate_daily_tasks_transactions_orders_sales(start_date, end_date, user_id):
-    # Initialize a dictionary to hold day-by-day data
     daily_data = {}
     current_date = start_date
     while current_date < end_date:
@@ -2585,7 +2595,6 @@ def calculate_daily_tasks_transactions_orders_sales(start_date, end_date, user_i
         daily_data[date_key] = {'orders': 0, 'sales': 0, 'active_tasks': 0, 'transactions': 0, 'products': 0}
         current_date += timedelta(days=1)
 
-    # Query for orders and sales
     orders_and_sales = orders_collection.aggregate([
         {
             '$match': {
@@ -2609,7 +2618,6 @@ def calculate_daily_tasks_transactions_orders_sales(start_date, end_date, user_i
             daily_data[date_key]['sales'] += item['count']
         daily_data[date_key]['orders'] += item['count']
 
-    # Query specifically for transactions
     transactions = transactions_collection.aggregate([
         {
             '$match': {
@@ -2628,7 +2636,6 @@ def calculate_daily_tasks_transactions_orders_sales(start_date, end_date, user_i
         date_key = item['_id']
         daily_data[date_key]['transactions'] += item['count']
 
-    # Query specifically for products
     products = products_collection.aggregate([
         {
             '$match': {
@@ -2647,7 +2654,6 @@ def calculate_daily_tasks_transactions_orders_sales(start_date, end_date, user_i
         date_key = item['_id']
         daily_data[date_key]['products'] += item['count']
 
-    # Query specifically for active tasks
     active_tasks = tasks_collection.aggregate([
         {
             '$match': {
@@ -2738,21 +2744,18 @@ def calculate_returns_info(user_id, start_date, end_date):
 
 
 def calculate_top_products(user_id, start_date, end_date, category=None):
-    # Match stage to filter orders by user_id, date, and optionally by category within variations
     match_stage = {
         '$match': {
             'user_id': user_id,
             'date': {'$gte': start_date, '$lt': end_date},
-            'status.status': 'Оплачено',  # Assuming you want to filter by paid orders
+            'status.status': 'Оплачено',
         }
     }
 
-    # Unwind the variations array to treat each product as a separate document
     unwind_stage = {
         '$unwind': '$variations'
     }
 
-    # Optional category match stage if a category is provided
     if category:
         category_match_stage = {
             '$match': {
@@ -2762,7 +2765,6 @@ def calculate_top_products(user_id, start_date, end_date, category=None):
     else:
         category_match_stage = {}
 
-    # Group stage to aggregate products, count their occurrences, and sum the amounts
     group_stage = {
         '$group': {
             '_id': {
@@ -2770,57 +2772,56 @@ def calculate_top_products(user_id, start_date, end_date, category=None):
                 'product_category': '$variations.category',
             },
             'count': {'$sum': 1},
-            'total_amount': {'$sum': '$variations.amount'}  # Sum the total amount sold for each product
+            'total_amount': {'$sum': '$variations.amount'}
         }
     }
 
-    # Sort stage to order the results by count and total_amount (if you want to prioritize higher sales volume)
     sort_stage = {
-        '$sort': {'count': -1, 'total_amount': -1}
+        '$sort': {'total_amount': -1}
     }
 
-    # Limit stage to get the top 5 products
-    limit_stage = {
-        '$limit': 5
-    }
-
-    # Building the pipeline conditionally based on whether a category filter is applied
     pipeline = [match_stage, unwind_stage]
-    if category:
+    if category_match_stage:
         pipeline.append(category_match_stage)
-    pipeline.extend([group_stage, sort_stage, limit_stage])
+    pipeline.extend([group_stage, sort_stage])
 
-    # Execute the aggregation pipeline
-    top_products = list(orders_collection.aggregate(pipeline))
+    results = list(orders_collection.aggregate(pipeline))
 
-    # Format results for readability
-    formatted_results = [{
-        'product_name': product['_id']['product_name'],
-        'product_category': product['_id']['product_category'],
-        'sold_count': product['count'],
-        'total_amount': product['total_amount']
-    } for product in top_products]
+    top_products = [
+        {
+            'product_name': item['_id']['product_name'],
+            'product_category': item['_id']['product_category'],
+            'count': item['count'],
+            'total_amount': item['total_amount']
+        }
+        for item in results
+    ]
 
-    return formatted_results
+    return top_products
 
 
 def calculate_purchase_segmentation(data, user_id):
-    filter_criteria = {'user_id': user_id}
-    for field in ['gender', 'variations.category']:
-        key = f'purchase_segmentation_{field.split(".")[-1]}' # Adjust key to match input data
-        value = data.get(key)
-        if value:
-            if 'gender' in field:
-                filter_criteria['gender'] = {'$regex': f'.*{re.escape(value)}.*', '$options': 'i'}
-            else:  # Handle category within variations
-                filter_criteria['variations'] = {'$elemMatch': {'category': value}}
+    pipeline = [
+        {
+            '$match': {
+                'user_id': user_id,
+                'status.status': 'Оплачено'
+            }
+        },
+        {
+            '$group': {
+                '_id': '$gender',
+                'total_sum': {'$sum': '$total_sum'},
+                'average_sum': {'$avg': '$total_sum'},
+                'count': {'$sum': 1}
+            }
+        }
+    ]
 
-    documents = list(orders_collection.find(filter_criteria))
-    purchase_segmentation_sum = sum(doc['total_sum'] for doc in documents)
+    segmentation = list(orders_collection.aggregate(pipeline))
 
     return {
-        'purchase_segmentation_amount': len(documents),
-        'purchase_segmentation_sum': purchase_segmentation_sum
+        'purchase_segmentation': segmentation
     }
 
 
@@ -3306,6 +3307,34 @@ def profile():
 
     return jsonify({'user': user}), 200
 
+
+@application.route('/notifications', methods=['POST'])
+def notifications():
+    data = request.get_json()
+    access_token = data.get('access_token')
+    page = data.get('page', 1)
+    per_page = data.get('per_page', 10)
+
+    # Check token validity
+    if not check_token(access_token):
+        return jsonify({'token': False}), 401
+
+    user_id = decode_access_token(access_token, SECRET_KEY).get('user_id')
+
+    skip = (page - 1) * per_page
+    total_notifications = notifications_collection.count_documents({'user_id': user_id})
+    notifications_cursor = notifications_collection.find({'user_id': user_id}).skip(skip).limit(per_page)
+
+    notifications = list(notifications_cursor)
+    for document in notifications:
+        document['_id'] = str(document['_id'])
+
+    return jsonify({
+        'notifications': notifications,
+        'page': page,
+        'per_page': per_page,
+        'total': total_notifications
+    }), 200
 
 
 if __name__ == '__main__':
