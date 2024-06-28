@@ -3313,6 +3313,41 @@ def profile():
     return jsonify({'user': user}), 200
 
 
+@application.route('/notifications', methods=['POST'])
+def notifications():
+    data = request.get_json()
+    access_token = data.get('access_token')
+    if check_token(access_token) is False:
+        return jsonify({'token': False}), 401
+    user_id = decode_access_token(access_token, SECRET_KEY).get('user_id')
+    page = data.get('page', 1)  # Default to page 1 if not provided
+    per_page = data.get('per_page', 10)  # Default to 10 items per page if not provided
+
+    filter_criteria = {'user_id': user_id}
+
+    # Count the total number of clients that match the filter criteria
+    total_notifications = notifications_collection.count_documents(filter_criteria)
+
+    total_pages = math.ceil(total_notifications / per_page)
+
+    # Paginate the query results using skip and limit, and apply filters
+    skip = (page - 1) * per_page
+    documents = list(notifications_collection.find(filter_criteria).skip(skip).limit(per_page))
+    for document in documents:
+        document['_id'] = str(document['_id'])
+
+    # Calculate the range of clients being displayed
+    start_range = skip + 1
+    end_range = min(skip + per_page, total_notifications)
+
+    # Serialize the documents using json_util from pymongo and specify encoding
+    response = Response(json_util.dumps(
+        {'notifications': documents, 'total_notifications': total_notifications, 'start_range': start_range, 'end_range': end_range,
+         'total_pages': total_pages},
+        ensure_ascii=False).encode('utf-8'),
+                        content_type='application/json;charset=utf-8')
+    return response, 200
+
 
 if __name__ == '__main__':
     application.run(port=8000)
