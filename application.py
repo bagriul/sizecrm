@@ -3430,34 +3430,31 @@ def hourly_analytics():
         end_date = selected_date + timedelta(days=1)
     except (TypeError, ValueError) as e:
         response_data = {
-            'hourly_sales_info': None,
-            'hourly_returns_info': None,
-            'hourly_top_products': None,
-            'hourly_purchase_segmentation': None
+            'sales_info': None,
+            'returns_info': None,
+            'top_products': None,
+            'purchase_segmentation': None,
+            'hourly_analytics': None
         }
         return jsonify(response_data), 200
 
-    hourly_sales_info = calculate_hourly_sales_info(user_id, start_date, end_date)
-    hourly_returns_info = calculate_hourly_returns_info(user_id, start_date, end_date)
-    hourly_top_products = calculate_hourly_top_products(user_id, start_date, end_date, data.get('product_category'))
-    hourly_purchase_segmentation = calculate_hourly_purchase_segmentation(data, user_id)
+    sales_info = calculate_sales_info(user_id, start_date, end_date)
+    returns_info = calculate_returns_info(user_id, start_date, end_date)
+    top_products = calculate_top_products(user_id, start_date, end_date, data.get('product_category'))
+    purchase_segmentation = calculate_purchase_segmentation(data, user_id)
+    hourly_analytics = calculate_hourly_tasks_transactions_orders_sales(start_date, end_date, user_id)
 
     response_data = {
-        **hourly_sales_info,
-        **hourly_returns_info,
-        'hourly_top_products': hourly_top_products,
-        **hourly_purchase_segmentation
+        **sales_info,
+        **returns_info,
+        'top_products': top_products,
+        **purchase_segmentation,
+        'hourly_analytics': hourly_analytics
     }
 
     return jsonify(response_data), 200
 
-def calculate_hourly_sales_info(user_id, start_date, end_date):
-    return calculate_hourly_sales_or_returns_info(user_id, start_date, end_date)
-
-def calculate_hourly_returns_info(user_id, start_date, end_date):
-    return calculate_hourly_sales_or_returns_info(user_id, start_date, end_date)
-
-def calculate_hourly_sales_or_returns_info(user_id, start_date, end_date):
+def calculate_sales_or_returns_info(user_id, start_date, end_date):
     filter_criteria = {
         'user_id': user_id,
         'date': {"$gte": start_date, "$lt": end_date},
@@ -3465,39 +3462,75 @@ def calculate_hourly_sales_or_returns_info(user_id, start_date, end_date):
     }
     documents = list(orders_collection.find(filter_criteria))
 
-    hourly_data = {}
-    for hour in range(24):
-        hourly_data[f'{hour:02}:00'] = {'orders': 0, 'sales': 0, 'returns': 0, 'canceled': 0}
+    sales_total_sum = returns_total_sum = canceled_total_sum = 0
+    sales_count = returns_count = canceled_count = 0
+    sales_hourly_info = {}
+    returns_hourly_info = {}
+    canceled_hourly_info = {}
 
     for doc in documents:
         hour_key = doc['date'].strftime('%H:00')
         status = doc['status']['status']
         if status == 'Оплачено':
-            hourly_data[hour_key]['sales'] += doc['total_sum']
-            hourly_data[hour_key]['orders'] += 1
+            sales_total_sum += doc['total_sum']
+            sales_count += 1
+            if hour_key not in sales_hourly_info:
+                sales_hourly_info[hour_key] = {'total_sum': 0, 'count': 0}
+            sales_hourly_info[hour_key]['total_sum'] += doc['total_sum']
+            sales_hourly_info[hour_key]['count'] += 1
         elif status == 'Повернено':
-            hourly_data[hour_key]['returns'] += doc['total_sum']
+            returns_total_sum += doc['total_sum']
+            returns_count += 1
+            if hour_key not in returns_hourly_info:
+                returns_hourly_info[hour_key] = {'total_sum': 0, 'count': 0}
+            returns_hourly_info[hour_key]['total_sum'] += doc['total_sum']
+            returns_hourly_info[hour_key]['count'] += 1
         elif status == 'Скасовано':
-            hourly_data[hour_key]['canceled'] += doc['total_sum']
+            canceled_total_sum += doc['total_sum']
+            canceled_count += 1
+            if hour_key not in canceled_hourly_info:
+                canceled_hourly_info[hour_key] = {'total_sum': 0, 'count': 0}
+            canceled_hourly_info[hour_key]['total_sum'] += doc['total_sum']
+            canceled_hourly_info[hour_key]['count'] += 1
 
-    return hourly_data
+    sales_average_check = sales_total_sum / sales_count if sales_count else 0
+    returns_average_check = returns_total_sum / returns_count if returns_count else 0
+    canceled_average_check = canceled_total_sum / canceled_count if canceled_count else 0
 
-def calculate_hourly_top_products(user_id, start_date, end_date, category=None):
-    # Match stage to filter orders by user_id, date, and optionally by category within variations
+    return {
+        'sales_total_sum': sales_total_sum,
+        'sales_average_check': sales_average_check,
+        'sales_amount': sales_count,
+        'hourly_sales_info': sales_hourly_info,
+        'returns_total_sum': returns_total_sum,
+        'returns_average_check': returns_average_check,
+        'returns_amount': returns_count,
+        'hourly_returns_info': returns_hourly_info,
+        'canceled_total_sum': canceled_total_sum,
+        'canceled_average_check': canceled_average_check,
+        'canceled_amount': canceled_count,
+        'hourly_canceled_info': canceled_hourly_info
+    }
+
+def calculate_sales_info(user_id, start_date, end_date):
+    return calculate_sales_or_returns_info(user_id, start_date, end_date)
+
+def calculate_returns_info(user_id, start_date, end_date):
+    return calculate_sales_or_returns_info(user_id, start_date, end_date)
+
+def calculate_top_products(user_id, start_date, end_date, category=None):
     match_stage = {
         '$match': {
             'user_id': user_id,
             'date': {'$gte': start_date, '$lt': end_date},
-            'status.status': 'Оплачено',  # Assuming you want to filter by paid orders
+            'status.status': 'Оплачено',
         }
     }
 
-    # Unwind the variations array to treat each product as a separate document
     unwind_stage = {
         '$unwind': '$variations'
     }
 
-    # Optional category match stage if a category is provided
     if category:
         category_match_stage = {
             '$match': {
@@ -3507,7 +3540,6 @@ def calculate_hourly_top_products(user_id, start_date, end_date, category=None):
     else:
         category_match_stage = {}
 
-    # Group stage to aggregate products, count their occurrences, and sum the amounts
     group_stage = {
         '$group': {
             '_id': {
@@ -3516,25 +3548,21 @@ def calculate_hourly_top_products(user_id, start_date, end_date, category=None):
                 'hour': {'$hour': '$date'}
             },
             'count': {'$sum': 1},
-            'total_amount': {'$sum': '$variations.amount'}  # Sum the total amount sold for each product
+            'total_amount': {'$sum': '$variations.amount'}
         }
     }
 
-    # Sort stage to order the results by hour, count and total_amount (if you want to prioritize higher sales volume)
     sort_stage = {
         '$sort': {'_id.hour': 1, 'count': -1, 'total_amount': -1}
     }
 
-    # Building the pipeline conditionally based on whether a category filter is applied
     pipeline = [match_stage, unwind_stage]
     if category:
         pipeline.append(category_match_stage)
     pipeline.extend([group_stage, sort_stage])
 
-    # Execute the aggregation pipeline
     top_products = list(orders_collection.aggregate(pipeline))
 
-    # Format results for readability
     formatted_results = [{
         'hour': f'{product["_id"]["hour"]:02}:00',
         'product_name': product['_id']['product_name'],
@@ -3545,15 +3573,15 @@ def calculate_hourly_top_products(user_id, start_date, end_date, category=None):
 
     return formatted_results
 
-def calculate_hourly_purchase_segmentation(data, user_id):
+def calculate_purchase_segmentation(data, user_id):
     filter_criteria = {'user_id': user_id}
     for field in ['gender', 'variations.category']:
-        key = f'purchase_segmentation_{field.split(".")[-1]}' # Adjust key to match input data
+        key = f'purchase_segmentation_{field.split(".")[-1]}'
         value = data.get(key)
         if value:
             if 'gender' in field:
                 filter_criteria['gender'] = {'$regex': f'.*{re.escape(value)}.*', '$options': 'I'}
-            else:  # Handle category within variations
+            else:
                 filter_criteria['variations'] = {'$elemMatch': {'category': value}}
 
     documents = list(orders_collection.find(filter_criteria))
@@ -3567,6 +3595,90 @@ def calculate_hourly_purchase_segmentation(data, user_id):
         hour_key = doc['date'].strftime('%H:00')
         hourly_data[hour_key]['purchase_segmentation_sum'] += doc['total_sum']
         hourly_data[hour_key]['purchase_segmentation_amount'] += 1
+
+    return hourly_data
+
+def calculate_hourly_tasks_transactions_orders_sales(start_date, end_date, user_id):
+    hourly_data = {}
+    for hour in range(24):
+        hourly_data[f'{hour:02}:00'] = {'orders': 0, 'sales': 0, 'active_tasks': 0, 'transactions': 0, 'products': 0}
+
+    orders_and_sales = orders_collection.aggregate([
+        {
+            '$match': {
+                'user_id': user_id,
+                'date': {'$gte': start_date, '$lt': end_date}
+            }
+        },
+        {
+            '$group': {
+                '_id': {
+                    'hour': {'$hour': '$date'},
+                    'status': '$status.status'
+                },
+                'count': {'$sum': 1}
+            }
+        }
+    ])
+    for item in orders_and_sales:
+        hour_key = f'{item["_id"]["hour"]:02}:00'
+        if item['_id']['status'] == 'Оплачено':
+            hourly_data[hour_key]['sales'] += item['count']
+        hourly_data[hour_key]['orders'] += item['count']
+
+    transactions = transactions_collection.aggregate([
+        {
+            '$match': {
+                'user_id': user_id,
+                'date': {'$gte': start_date, '$lt': end_date}
+            }
+        },
+        {
+            '$group': {
+                '_id': {'hour': {'$hour': '$date'}},
+                'count': {'$sum': 1}
+            }
+        }
+    ])
+    for item in transactions:
+        hour_key = f'{item["_id"]["hour"]:02}:00'
+        hourly_data[hour_key]['transactions'] += item['count']
+
+    active_tasks = tasks_collection.aggregate([
+        {
+            '$match': {
+                'user_id': user_id,
+                'date': {'$gte': start_date, '$lt': end_date},
+            }
+        },
+        {
+            '$group': {
+                '_id': {'hour': {'$hour': '$date'}},
+                'count': {'$sum': 1}
+            }
+        }
+    ])
+    for item in active_tasks:
+        hour_key = f'{item["_id"]["hour"]:02}:00'
+        hourly_data[hour_key]['active_tasks'] += item['count']
+
+    products = products_collection.aggregate([
+        {
+            '$match': {
+                'user_id': user_id,
+                'date': {'$gte': start_date, '$lt': end_date}
+            }
+        },
+        {
+            '$group': {
+                '_id': {'hour': {'$hour': '$date'}},
+                'count': {'$sum': 1}
+            }
+        }
+    ])
+    for item in products:
+        hour_key = f'{item["_id"]["hour"]:02}:00'
+        hourly_data[hour_key]['products'] += item['count']
 
     return hourly_data
 
