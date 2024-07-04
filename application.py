@@ -3438,10 +3438,10 @@ def hourly_analytics():
         }
         return jsonify(response_data), 200
 
-    sales_info = calculate_sales_info(user_id, start_date, end_date)
-    returns_info = calculate_returns_info(user_id, start_date, end_date)
-    top_products = calculate_top_products(user_id, start_date, end_date, data.get('product_category'))
-    purchase_segmentation = calculate_purchase_segmentation(data, user_id)
+    sales_info = calculate_sales_info_hourly(user_id, start_date, end_date)
+    returns_info = calculate_returns_info_hourly(user_id, start_date, end_date)
+    top_products = calculate_top_products_hourly(user_id, start_date, end_date, data.get('product_category'))
+    purchase_segmentation = calculate_purchase_segmentation_hourly(data, user_id)
     hourly_analytics = calculate_hourly_tasks_transactions_orders_sales(start_date, end_date, user_id)
 
     response_data = {
@@ -3454,7 +3454,7 @@ def hourly_analytics():
 
     return jsonify(response_data), 200
 
-def calculate_sales_or_returns_info(user_id, start_date, end_date):
+def calculate_sales_or_returns_info_hourly(user_id, start_date, end_date):
     filter_criteria = {
         'user_id': user_id,
         'date': {"$gte": start_date, "$lt": end_date},
@@ -3512,13 +3512,13 @@ def calculate_sales_or_returns_info(user_id, start_date, end_date):
         'hourly_canceled_info': canceled_hourly_info
     }
 
-def calculate_sales_info(user_id, start_date, end_date):
-    return calculate_sales_or_returns_info(user_id, start_date, end_date)
+def calculate_sales_info_hourly(user_id, start_date, end_date):
+    return calculate_sales_or_returns_info_hourly(user_id, start_date, end_date)
 
-def calculate_returns_info(user_id, start_date, end_date):
-    return calculate_sales_or_returns_info(user_id, start_date, end_date)
+def calculate_returns_info_hourly(user_id, start_date, end_date):
+    return calculate_sales_or_returns_info_hourly(user_id, start_date, end_date)
 
-def calculate_top_products(user_id, start_date, end_date, category=None):
+def calculate_top_products_hourly(user_id, start_date, end_date, category=None):
     match_stage = {
         '$match': {
             'user_id': user_id,
@@ -3573,7 +3573,7 @@ def calculate_top_products(user_id, start_date, end_date, category=None):
 
     return formatted_results
 
-def calculate_purchase_segmentation(data, user_id):
+def calculate_purchase_segmentation_hourly(data, user_id):
     filter_criteria = {'user_id': user_id}
     for field in ['gender', 'variations.category']:
         key = f'purchase_segmentation_{field.split(".")[-1]}'
