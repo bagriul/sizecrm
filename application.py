@@ -19,6 +19,7 @@ from flask_bcrypt import Bcrypt
 import telebot
 import random
 import string
+import pandas as pd
 
 application = Flask(__name__)
 CORS(application)
@@ -2413,58 +2414,60 @@ def send_mailing():
         return jsonify({'message': True}), 200
 
 
-@application.route('/new_mailing_list', methods=['POST'])
-def new_mailing_list():
+@application.route('/new_category_list', methods=['POST'])
+def new_category_list():
     data = request.get_json()
     access_token = data.get('access_token')
-    if check_token(access_token) is False:
+
+    # Check access token validity
+    if not check_token(access_token):
         return jsonify({'token': False}), 401
+
     user_id = decode_access_token(access_token, SECRET_KEY).get('user_id')
-    min_price = data.get('min_price')
-    max_price = data.get('max_price')
-    min_total_price = data.get('min_total_price')
-    max_total_price = data.get('max_total_price')
-    category = data.get('category')
+    statuses = data.get('statuses', [])
 
+    # Create filter criteria based on user_id and statuses
     filter_criteria = {'user_id': user_id}
-    if category:
-        filter_criteria['variations'] = {'$elemMatch': {'category': category}}
+    if statuses:
+        filter_criteria['status.status'] = {'$in': statuses}
 
-    if min_price is not None and max_price is not None:
-        filter_criteria['variations'] = {
-            '$elemMatch': {
-                'price': {'$gte': min_price, '$lte': max_price}
-            }
-        }
-    elif min_price is not None:
-        filter_criteria['variations'] = {
-            '$elemMatch': {
-                'price': {'$gte': min_price}
-            }
-        }
-    elif max_price is not None:
-        filter_criteria['variations'] = {
-            '$elemMatch': {
-                'price': {'$lte': max_price}
-            }
-        }
-
-    if min_total_price is not None and max_total_price is not None:
-        filter_criteria['total_sum'] = {'$gte': min_price, '$lte': max_price}
-    elif min_total_price is not None:
-        filter_criteria['total_sum'] = {'$gte': min_price}
-    elif max_total_price is not None:
-        filter_criteria['total_sum'] = {'$lte': max_price}
-
-    documents = list(orders_collection.find(filter_criteria))
-    email_list = []
-    for document in documents:
-        client = clients_collection.find_one({'email': document['email']})
-        email = client['email']
-        if email not in email_list:
-            email_list.append(email)
+    # Retrieve clients based on filter criteria
+    clients = clients_collection.find(filter_criteria)
+    email_list = [client['email'] for client in clients if 'email' in client]
 
     return jsonify({'emails': email_list}), 200
+
+
+@application.route('/upload_emails', methods=['POST'])
+def upload_emails():
+    access_token = request.form.get('access_token')
+
+    # Check access token validity
+    if not check_token(access_token):
+        return jsonify({'token': False}), 401
+
+    if 'file' not in request.files:
+        return jsonify({'message': False}), 400
+
+    file = request.files['file']
+    if file.filename == '':
+        return jsonify({'message': False}), 400
+
+    if file and file.filename.endswith('.xlsx'):
+        try:
+            # Read the XLSX file
+            df = pd.read_excel(file)
+            if 'email' not in df.columns:
+                return jsonify({'message': False}), 400
+
+            # Extract the emails
+            email_list = df['email'].dropna().tolist()
+            return jsonify({'emails': email_list}), 200
+        except Exception as e:
+            print(e)
+            return jsonify({'message': False}), 500
+    else:
+        return jsonify({'message': False}), 400
 
 
 @application.route('/get_category', methods=['POST'])
@@ -2495,65 +2498,6 @@ def get_category():
         ensure_ascii=False).encode('utf-8'),
                         content_type='application/json;charset=utf-8')
     return response, 200
-
-
-@application.route('/new_telegram_list', methods=['POST'])
-def new_telegram_list():
-    data = request.get_json()
-    access_token = data.get('access_token')
-    if check_token(access_token) is False:
-        return jsonify({'token': False}), 401
-    user_id = decode_access_token(access_token, SECRET_KEY).get('user_id')
-    min_price = data.get('min_price')
-    max_price = data.get('max_price')
-    min_total_price = data.get('min_total_price')
-    max_total_price = data.get('max_total_price')
-    category = data.get('category')
-
-    filter_criteria = {'user_id': user_id}
-    if category:
-        filter_criteria['variations'] = {'$elemMatch': {'category': category}}
-
-    if min_price is not None and max_price is not None:
-        filter_criteria['variations'] = {
-            '$elemMatch': {
-                'price': {'$gte': min_price, '$lte': max_price}
-            }
-        }
-    elif min_price is not None:
-        filter_criteria['variations'] = {
-            '$elemMatch': {
-                'price': {'$gte': min_price}
-            }
-        }
-    elif max_price is not None:
-        filter_criteria['variations'] = {
-            '$elemMatch': {
-                'price': {'$lte': max_price}
-            }
-        }
-
-    if min_total_price is not None and max_total_price is not None:
-        filter_criteria['total_sum'] = {'$gte': min_price, '$lte': max_price}
-    elif min_total_price is not None:
-        filter_criteria['total_sum'] = {'$gte': min_price}
-    elif max_total_price is not None:
-        filter_criteria['total_sum'] = {'$lte': max_price}
-
-    documents = list(orders_collection.find(filter_criteria))
-    tgID_list = []
-    for document in documents:
-        client = clients_collection.find_one({'email': document['email']})
-        try:
-            tgID = client['tgID']
-        except TypeError:
-            continue
-        except KeyError:
-            continue
-        if tgID not in tgID_list:
-            tgID_list.append(tgID)
-
-    return jsonify({'tgIDs': tgID_list}), 200
 
 
 @application.route('/analytics', methods=['POST'])

@@ -31,4 +31,5 @@ urllib3==2.1.0
 URLObject==2.4.3
 Werkzeug==3.0.0
 zipp==3.17.0
-pyTelegramBotAPI==4.15.2
+pandas
+openpyxl
