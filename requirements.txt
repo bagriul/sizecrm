@@ -34,3 +34,4 @@ zipp==3.17.0
 pandas
 openpyxl
 pyTelegramBotAPI
+scheduler
