@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify, Response, session
+from flask import Flask, request, jsonify, Response, session, send_file
 import jwt
 from pymongo import MongoClient, ASCENDING, DESCENDING
 from bson import json_util, ObjectId
@@ -20,6 +20,10 @@ import telebot
 import random
 import string
 import pandas as pd
+import io
+from scheduler import start_scheduler
+import os
+import tempfile
 
 application = Flask(__name__)
 CORS(application)
@@ -1356,7 +1360,6 @@ def order_info():
         return jsonify({'message': 'Order not found'}), 404
 
 
-
 @application.route('/add_task', methods=['POST'])
 def add_task():
     data = request.get_json()
@@ -2376,6 +2379,7 @@ def send_mailing():
     subject = data.get('subject')
     recipients = data.get('recipients')
     text = data.get('text')
+    image_base64 = data.get('image')
 
     today = datetime.today()
     if type == 'mail':
@@ -2383,23 +2387,32 @@ def send_mailing():
         for recipient in recipients:
             msg = Message(subject=subject, sender='bagriul@gmail.com', recipients=[recipient])
             msg.body = text
-            #mail.send(msg)
+
+            # If there's an image, decode it and attach it
+            if image_base64:
+                image_data = base64.b64decode(image_base64)
+                image = io.BytesIO(image_data)
+                image_name = 'image.png'  # You can use any appropriate name and format
+                msg.attach(image_name, 'image/png', image.read())
+
+            # mail.send(msg)
             client = clients_collection.find_one({'email': recipient})
             recipients_names.append({'client_name': client['name'], 'client_id': str(client['_id'])})
+
         document = {'date': today,
                     'subject': subject,
                     'text': text,
                     'amount': len(recipients),
                     'recipients': recipients_names,
                     'type': 'mail',
-                    'user_id': user_id,}
+                    'user_id': user_id}
         mailing_history_collection.insert_one(document)
         return jsonify({'message': True}), 200
     elif type == 'telegram':
         recipients_names = []
         for recipient in recipients:
             try:
-                #bot.send_message(recipient, text)
+                # bot.send_message(recipient, text)
                 client = clients_collection.find_one({'tgID': recipient})
                 recipients_names.append({'client_name': client['name'], 'client_id': str(client['_id'])})
             except Exception as e:
@@ -3627,5 +3640,41 @@ def calculate_hourly_tasks_transactions_orders_sales(start_date, end_date, user_
     return hourly_data
 
 
+@application.route('/analytics_file', methods=['POST'])
+def get_analytics_file():
+    data = request.get_json() or {}
+    access_token = data.get('access_token')
+    start_date = data.get('start_date')
+    end_date = data.get('end_date')
+    file_format = data.get('file_format', 'xlsx')  # Default to 'xlsx' if not provided
+    file_name = data.get('file_name', 'daily_analytics')
+
+    if not check_token(access_token):
+        return jsonify({'error': 'Invalid token'}), 401
+
+    user_id = decode_access_token(access_token, SECRET_KEY).get('user_id')
+
+    analytics_data = calculate_daily_tasks_transactions_orders_sales(start_date, end_date, user_id)
+
+    # Convert the analytics data to a pandas DataFrame
+    df = pd.DataFrame(analytics_data).T
+
+    # Create a temporary directory to hold the file
+    temp_dir = tempfile.gettempdir()
+    if file_format == 'csv':
+        file_path = os.path.join(temp_dir, f'{file_name}.csv')
+        # Write the DataFrame to the CSV file
+        df.to_csv(file_path, index=False)
+    else:
+        file_path = os.path.join(temp_dir, f'{file_name}.xlsx')
+        # Write the DataFrame to the Excel file
+        with pd.ExcelWriter(file_path, engine='openpyxl') as writer:
+            df.to_excel(writer, sheet_name='Daily Analytics', index=False)
+
+    # Send the file as a response
+    return send_file(file_path, as_attachment=True)
+
+
 if __name__ == '__main__':
+    start_scheduler()
     application.run(port=8000)
