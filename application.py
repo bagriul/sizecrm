@@ -2544,6 +2544,7 @@ def analytics():
     purchase_segmentation = calculate_purchase_segmentation(data, user_id)
     #mailing_history, total_documents = get_mailing_history(data, user_id)
     daily_analytics = calculate_daily_tasks_transactions_orders_sales(start_date, end_date, user_id)
+    print(daily_analytics)
 
     response_data = {
         **sales_info,
@@ -3654,7 +3655,11 @@ def get_analytics_file():
 
     user_id = decode_access_token(access_token, SECRET_KEY).get('user_id')
 
+    start_date = datetime.strptime(start_date, "%a %b %d %Y")
+    end_date = datetime.strptime(end_date, "%a %b %d %Y") + timedelta(days=1)
+
     analytics_data = calculate_daily_tasks_transactions_orders_sales(start_date, end_date, user_id)
+    print(analytics_data)
 
     # Convert the analytics data to a pandas DataFrame
     df = pd.DataFrame(analytics_data).T
