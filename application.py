@@ -3658,9 +3658,8 @@ def upload_file_to_s3(file_path, unique_filename):
 
 def generate_unique_filename(file_name, file_format):
     current_timestamp = datetime.now().strftime('%Y%m%d%H%M%S%f')[:-3]
-    unique_identifier = str(uuid.uuid4())
     file_extension = file_format.lower()
-    unique_filename = f"{current_timestamp}_{unique_identifier}.{file_extension}"
+    unique_filename = f"{file_name}_{current_timestamp}.{file_extension}"
     return unique_filename
 
 @application.route('/analytics_file', methods=['POST'])
