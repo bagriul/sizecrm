@@ -24,6 +24,7 @@ import io
 from scheduler import start_scheduler
 import os
 import tempfile
+import uuid
 
 application = Flask(__name__)
 CORS(application)
@@ -3641,45 +3642,62 @@ def calculate_hourly_tasks_transactions_orders_sales(start_date, end_date, user_
     return hourly_data
 
 
+def upload_file_to_s3(file_path, unique_filename):
+    # Read the file content and create an in-memory file-like object
+    with open(file_path, 'rb') as f:
+        file_stream = io.BytesIO(f.read())
+    file_stream.seek(0)
+
+    # Upload the file directly to S3
+    config.s3_client.upload_fileobj(
+        file_stream,
+        'sizebucket',
+        f'analytics_files/{unique_filename}',
+        ExtraArgs={'ACL': 'public-read'}
+    )
+
+def generate_unique_filename(file_name, file_format):
+    current_timestamp = datetime.now().strftime('%Y%m%d%H%M%S%f')[:-3]
+    unique_identifier = str(uuid.uuid4())
+    file_extension = file_format.lower()
+    unique_filename = f"{current_timestamp}_{unique_identifier}.{file_extension}"
+    return unique_filename
+
 @application.route('/analytics_file', methods=['POST'])
 def get_analytics_file():
     data = request.get_json() or {}
     access_token = data.get('access_token')
     start_date = data.get('start_date')
     end_date = data.get('end_date')
-    file_format = data.get('file_format', 'xlsx')  # Default to 'xlsx' if not provided
+    file_format = data.get('file_format', 'xlsx')
     file_name = data.get('file_name', 'daily_analytics')
 
     if not check_token(access_token):
         return jsonify({'error': 'Invalid token'}), 401
 
     user_id = decode_access_token(access_token, SECRET_KEY).get('user_id')
-
     start_date = datetime.strptime(start_date, "%a %b %d %Y")
     end_date = datetime.strptime(end_date, "%a %b %d %Y") + timedelta(days=1)
 
     analytics_data = calculate_daily_tasks_transactions_orders_sales(start_date, end_date, user_id)
-    print(analytics_data)
-
-    # Convert the analytics data to a pandas DataFrame
     df = pd.DataFrame(analytics_data).T
 
-    # Create a temporary directory to hold the file
     temp_dir = tempfile.gettempdir()
     if file_format == 'csv':
         file_path = os.path.join(temp_dir, f'{file_name}.csv')
-        # Write the DataFrame to the CSV file
         df.to_csv(file_path, index=False)
     else:
         file_path = os.path.join(temp_dir, f'{file_name}.xlsx')
-        # Write the DataFrame to the Excel file
         with pd.ExcelWriter(file_path, engine='openpyxl') as writer:
             df.to_excel(writer, sheet_name='Daily Analytics', index=False)
 
-    # Send the file as a response
-    return send_file(file_path, as_attachment=True)
+    unique_filename = generate_unique_filename(file_name, file_format)
+    upload_file_to_s3(file_path, unique_filename)
+
+    link = f'https://sizebucket.fra1.digitaloceanspaces.com/analytics_files/{unique_filename}'
+    return jsonify({'download_link': link}), 200
 
 
 if __name__ == '__main__':
     start_scheduler()
-    application.run(port=8000)
+    application.run(port=5000)
