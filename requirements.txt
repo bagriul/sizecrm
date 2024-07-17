@@ -35,3 +35,4 @@ pandas
 openpyxl
 pyTelegramBotAPI
 APScheduler
+boto3
