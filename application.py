@@ -1,3 +1,5 @@
+import traceback
+
 from flask import Flask, request, jsonify, Response, session, send_file
 import jwt
 from pymongo import MongoClient, ASCENDING, DESCENDING
@@ -53,6 +55,8 @@ order_sources_collection = db['order_sources']
 payment_methods_collection = db['payment_methods']
 loyalty_collection = db['loyalty']
 notifications_collection = db['notifications']
+api_keys_collection = db['api_keys']
+instagram_messages_collection = db['instagram_messages']
 
 google_bp = make_google_blueprint(client_id='YOUR_GOOGLE_CLIENT_ID',
                                   client_secret='YOUR_GOOGLE_CLIENT_SECRET',
@@ -70,6 +74,8 @@ mail = Mail(application)
 
 bcrypt = Bcrypt(application)
 bot = telebot.TeleBot('')
+
+NOVA_POSHTA_API_URL = "https://api.novaposhta.ua/v2.0/json/"
 
 
 @application.route('/', methods=['GET'])
@@ -2942,6 +2948,50 @@ def update_variation():
     return jsonify({'message': True}), 200
 
 
+@application.route('/add_instagram', methods=['POST'])
+def add_instagram():
+    data = request.get_json()
+    access_token = data.get('access_token')
+    # Check if the access token is valid
+    if not check_token(access_token):
+        return jsonify({'token': False}), 401
+    instagram_username = data.get('instagram_username')
+
+    def get_instagram_id(username):
+        # Send GET request to the Instagram profile page
+        url = f'https://instagram.com/{username}'
+        response = requests.get(url)
+
+        # Check if the request was successful
+        if response.status_code == 200:
+            # Use regex to find the line containing 'profile_id'
+            match = re.search(r'"profile_id":"(\d+)"', response.text)
+
+            if match:
+                # Extract and print the profile ID
+                profile_id = match.group(1)
+                return profile_id
+            else:
+                return False
+        else:
+            return False
+
+    # Decode user_id from access token
+    user_id = decode_access_token(access_token, SECRET_KEY).get('user_id')
+    instagram_id = get_instagram_id(instagram_username)
+    if instagram_id is False:
+        return jsonify({'message': False})
+
+    users_collection.update_one(
+        {'_id': ObjectId(user_id)},
+        {'$set': {
+            'instagram_username': instagram_username,
+            'instagram_id': instagram_id
+        }}
+    )
+    return jsonify({'message': True}), 200
+
+
 @application.route('/settings', methods=['POST'])
 def handle_settings():
     data = request.get_json()
@@ -2982,7 +3032,8 @@ def add_setting(request):
         'subwarehouse': warehouses_collection,
         'shipping_method': shipping_methods_collection,
         'order_source': order_sources_collection,
-        'payment_method': payment_methods_collection
+        'payment_method': payment_methods_collection,
+        'api_keys': api_keys_collection
     }
 
     # Insert setting data into the appropriate collection
@@ -3024,7 +3075,8 @@ def view_settings(request):
         'subwarehouse': warehouses_collection,
         'shipping_method': shipping_methods_collection,
         'order_source': order_sources_collection,
-        'payment_method': payment_methods_collection
+        'payment_method': payment_methods_collection,
+        'api_keys': api_keys_collection
     }
 
     # Retrieve settings data from the appropriate collection
@@ -3061,7 +3113,8 @@ def delete_setting(request):
         'subwarehouse': warehouses_collection,
         'shipping_method': shipping_methods_collection,
         'order_source': order_sources_collection,
-        'payment_method': payment_methods_collection
+        'payment_method': payment_methods_collection,
+        'api_keys': api_keys_collection
     }
 
     # Retrieve the appropriate collection based on the setting type
@@ -3695,6 +3748,553 @@ def get_analytics_file():
 
     link = f'https://sizebucket.fra1.digitaloceanspaces.com/analytics_files/{unique_filename}'
     return jsonify({'download_link': link}), 200
+
+
+@application.route('/get_city_ref', methods=['POST'])
+def get_city_ref():
+    """
+    Функція для отримання Ref міста за його назвою через API Нової Пошти
+    :param city_name: Назва міста (наприклад, "Київ")
+    :return: Ref міста або None, якщо місто не знайдено
+    """
+    data = request.json
+    access_token = data.get('access_token')
+    city_name = data.get('city_name')
+
+    user_id = decode_access_token(access_token, SECRET_KEY).get('user_id')
+    API_KEY = api_keys_collection.find_one({'user_id': user_id, 'type': 'np'})['token']
+
+    # Параметри для запиту
+    payload = {
+        "apiKey": API_KEY,
+        "modelName": "Address",
+        "calledMethod": "getCities",
+        "methodProperties": {
+            "FindByString": city_name
+        }
+    }
+
+    # Відправка запиту
+    response = requests.post(NOVA_POSHTA_API_URL, json=payload)
+
+    # Перевірка статусу відповіді
+    if response.status_code == 200:
+        data = response.json()
+
+        if data.get('success'):
+            # Перевіряємо, чи місто знайдено в результатах
+            cities = data.get('data', [])
+            if cities:
+                city_ref = cities[0].get('Ref')  # Беремо перший результат
+                return jsonify({"CityRef": city_ref})
+            else:
+                return jsonify({"error": f"Місто {city_name} не знайдено."})
+        else:
+            return jsonify({"error": data.get('errors')})
+    else:
+        return jsonify({"error": response.status_code})
+
+
+@application.route('/get_counterparty_ref', methods=['POST'])
+def get_counterparty_ref():
+    """
+    Функція для отримання Ref відправника або отримувача через API Нової Пошти.
+    :param counterparty_type: "Sender" або "Recipient"
+    :return: Ref відправника або отримувача
+    """
+    data = request.json
+    access_token = data.get('access_token')
+    counterparty_type = data.get('counterparty_type')
+
+    user_id = decode_access_token(access_token, SECRET_KEY).get('user_id')
+    API_KEY = api_keys_collection.find_one({'user_id': user_id, 'type': 'np'})['token']
+
+    payload = {
+        "apiKey": API_KEY,
+        "modelName": "Counterparty",
+        "calledMethod": "getCounterparties",
+        "methodProperties": {
+            "CounterpartyProperty": counterparty_type,
+            "Page": "1"
+        }
+    }
+
+    response = requests.post(NOVA_POSHTA_API_URL, json=payload)
+
+    if response.status_code == 200:
+        data = response.json()
+
+        if data.get('success'):
+            counterparties = data.get('data', [])
+            if counterparties:
+                return jsonify({'counterparties': counterparties})
+            else:
+                return jsonify({"error": f"{counterparty_type} не знайдено."})
+        else:
+            return jsonify({"error": data.get('errors')})
+    else:
+        return jsonify({"error": response.status_code})
+
+
+@application.route('/add_new_counterparty', methods=['POST'])
+def add_new_counterparty():
+    """
+    Функція для додавання нового відправника або отримувача через API Нової Пошти.
+    :param name: Ім'я або назва компанії
+    :param phone: Номер телефону
+    :param city_ref: Ref міста
+    :param counterparty_type: "Sender" або "Recipient"
+    :return: Ref новоствореного відправника або отримувача
+    """
+    data = request.json
+    access_token = data.get('access_token')
+
+    user_id = decode_access_token(access_token, SECRET_KEY).get('user_id')
+    API_KEY = api_keys_collection.find_one({'user_id': user_id, 'type': 'np'})['token']
+
+    payload = {
+        "apiKey": API_KEY,
+        "modelName": "Counterparty",
+        "calledMethod": "save",
+        "methodProperties": {
+            "FirstName": data.get('FirstName'),
+            "MiddleName": data.get('MiddleName', ''),  # Заповни за необхідності
+            "LastName": data.get('LastName'),
+            "Phone": data.get('Phone'),
+            "Email": data.get('Email', ''),  # Заповни за необхідності
+            "CityRef": data.get('CityRef'),
+            "CounterpartyType": data.get('CounterpartyType'),  # PrivatePerson or Organization
+            "CounterpartyProperty": data.get('CounterpartyProperty')  # Sender or Recipient
+        }
+    }
+
+    response = requests.post(NOVA_POSHTA_API_URL, json=payload)
+
+    if response.status_code == 200:
+        data = response.json()
+
+        if data.get('success'):
+            counterparty_ref = data.get('data', [])[0].get('Ref')
+            return jsonify({"CounterpartyRef": counterparty_ref})
+        else:
+            return jsonify({'error': data})
+    else:
+        return jsonify({"error": response.status_code})
+
+
+@application.route('/get_contact_person_ref', methods=['POST'])
+def get_contact_person_ref():
+    """
+    Функція для отримання Ref контактної особи через API Нової Пошти
+    :param counterparty_ref: Ref відправника або отримувача
+    :return: Ref контактної особи або None
+    """
+    data = request.json
+    access_token = data.get('access_token')
+
+    user_id = decode_access_token(access_token, SECRET_KEY).get('user_id')
+    API_KEY = api_keys_collection.find_one({'user_id': user_id, 'type': 'np'})['token']
+
+    payload = {
+        "apiKey": API_KEY,
+        "modelName": "Counterparty",
+        "calledMethod": "getCounterpartyContactPersons",
+        "methodProperties": {
+            "Ref": data.get('counterparty_ref')
+        }
+    }
+
+    response = requests.post(NOVA_POSHTA_API_URL, json=payload)
+
+    if response.status_code == 200:
+        data = response.json()
+
+        if data.get('success'):
+            contact_persons = data.get('data', [])
+            if contact_persons:
+                contact_person_ref = contact_persons[0].get('Ref')
+                return jsonify({'contact_person_ref': contact_person_ref})
+            else:
+                return jsonify({"error": "Контактну особу не знайдено"})
+        else:
+            return jsonify({"error": data.get('errors')})
+    else:
+        return jsonify({"error": response.status_code})
+
+
+@application.route('/get_warehouses', methods=['POST'])
+def get_warehouses():
+    """
+    Функція для отримання списку складів через API Нової Пошти.
+    :param city_ref: Ref міста
+    :return: список складів або повідомлення про помилку
+    """
+    data = request.json
+    access_token = data.get('access_token')
+
+    user_id = decode_access_token(access_token, SECRET_KEY).get('user_id')
+    API_KEY = api_keys_collection.find_one({'user_id': user_id, 'type': 'np'})['token']
+
+    payload = {
+        "apiKey": API_KEY,
+        "modelName": "Address",
+        "calledMethod": "getWarehouses",
+        "methodProperties": {
+            "CityRef": data.get('city_ref'),
+            "FindByString": data.get('find_by_string', '')
+        }
+    }
+
+    response = requests.post(NOVA_POSHTA_API_URL, json=payload)
+
+    if response.status_code == 200:
+        data = response.json()
+
+        if data.get('success'):
+            return jsonify({"success": True, "data": data.get('data')})
+        else:
+            return jsonify({"success": False, "errors": data.get('errors')})
+    else:
+        return jsonify({"success": False, "error": f"Помилка запиту: {response.status_code}"})
+
+
+@application.route('/create_invoice', methods=['POST'])
+def create_invoice():
+    try:
+        # Отримуємо дані з POST-запиту
+        data = request.json
+        access_token = data.get('access_token')
+        order_id = data.get('order_id')
+
+        user_id = decode_access_token(access_token, SECRET_KEY).get('user_id')
+        API_KEY = api_keys_collection.find_one({'user_id': user_id, 'type': 'np'})['token']
+
+        # Створюємо тіло запиту для API Нової Пошти
+        payload = {
+            "apiKey": API_KEY,
+            "modelName": "InternetDocument",
+            "calledMethod": "save",
+            "methodProperties": {
+                "Sender": data.get('Sender'),
+                "CitySender": data.get('CitySender'),
+                "SenderAddress": data.get('SenderAddress'),
+                "SendersPhone": data.get('SendersPhone'),
+                "Recipient": data.get('Recipient'),
+                "CityRecipient": data.get('CityRecipient'),
+                "RecipientAddress": data.get('RecipientAddress'),
+                "RecipientsPhone": data.get('RecipientsPhone'),
+                "ContactSender": data.get('ContactSender'),
+                "ContactRecipient": data.get('ContactRecipient'),
+                "Weight": data.get('Weight'),
+                "ServiceType": data.get('ServiceType', 'WarehouseWarehouse'),
+                "Cost": data.get('Cost', '100'),
+                "CargoType": data.get('CargoType', 'Cargo'),
+                "SeatsAmount": data.get('SeatsAmount', 1),
+                "Description": data.get('Description', 'Goods'),
+                "PayerType": data.get('PayerType'),
+                "PaymentMethod": data.get('PaymentMethod')
+            }
+        }
+
+        # Відправляємо запит до API Нової Пошти
+        response = requests.post(NOVA_POSHTA_API_URL, json=payload)
+
+        # Перевіряємо, чи вдалося відправити запит
+        if response.status_code == 200:
+            result = response.json()['data'][0]
+
+            np_info = {'delivery_cost': result['CostOnSite'],
+                       'estimated_delivery_date': result['EstimatedDeliveryDate'],
+                       'doc_number': result['IntDocNumber'],
+                       'ref': result['Ref']}
+            orders_collection.find_one_and_update({'_id': ObjectId(order_id)},
+                                                  {'$set': {'np_info': np_info}})
+            return jsonify({'message': True}), 200
+        else:
+            return jsonify({"error": "Failed to connect to Nova Poshta API"}), response.status_code
+
+    except Exception as e:
+        print(traceback.format_exc())
+        return jsonify({"error": str(e)}), 500
+
+
+@application.route('/track_np', methods=['POST'])
+def track_shipment():
+    # Dictionary to map 'Код' to 'Статус'
+    status_dict = {
+        1: "Відправник самостійно створив цю накладну, але ще не надав до відправки",
+        2: "Видалено",
+        3: "Номер не знайдено",
+        4: "Відправлення у місті ХХXХ. (Статус для межобластных отправлень)",
+        41: "Відправлення у місті ХХXХ. (Статус для услуг локал стандарт и локал экспресс - доставка в пределах города)",
+        5: "Відправлення прямує до міста YYYY",
+        6: "Відправлення у місті YYYY, орієнтовна доставка до ВІДДІЛЕННЯ-XXX dd-mm. Очікуйте додаткове повідомлення про прибуття",
+        7: "Прибув на відділення",
+        8: "Прибув на відділення (завантажено в Поштомат)",
+        9: "Відправлення отримано",
+        10: "Відправлення отримано %DateReceived%. Протягом доби ви одержите SMS-повідомлення про надходження грошового переказу та зможете отримати його в касі відділення «Нова пошта»",
+        11: "Відправлення отримано %DateReceived%. Грошовий переказ видано одержувачу.",
+        12: "Нова Пошта комплектує ваше відправлення",
+        101: "На шляху до одержувача",
+        102: "Відмова від отримання (Відправником створено замовлення на повернення)",
+        103: "Відмова одержувача (отримувач відмовився від відправлення)",
+        104: "Змінено адресу",
+        105: "Припинено зберігання",
+        106: "Одержано і створено ЄН зворотньої доставки",
+        111: "Невдала спроба доставки через відсутність Одержувача на адресі або зв'язку з ним",
+        112: "Дата доставки перенесена Одержувачем"
+    }
+
+    data = request.json
+    access_token = data.get('access_token')
+    tracking_number = data.get('tracking_number')
+
+    user_id = decode_access_token(access_token, SECRET_KEY).get('user_id')
+    API_KEY = api_keys_collection.find_one({'user_id': user_id, 'type': 'np'})['token']
+
+    # Build the request payload for Nova Poshta API
+    np_payload = {
+        "apiKey": API_KEY,
+        "modelName": "TrackingDocument",
+        "calledMethod": "getStatusDocuments",
+        "methodProperties": {
+            "Documents": [
+                {
+                    "DocumentNumber": tracking_number
+                }
+            ]
+        }
+    }
+
+    # Send request to Nova Poshta API
+    response = requests.post(NOVA_POSHTA_API_URL, json=np_payload)
+    response_data = response.json()
+
+    # Extract the tracking status from the response
+    if response_data.get('success'):
+        tracking_info = response_data['data'][0]  # Assuming first document is relevant
+        status_code = tracking_info.get('StatusCode')
+
+        # Map the status code to the corresponding status message
+        status_message = status_dict.get(int(status_code), "Статус не знайдено")
+        return jsonify({"tracking_number": tracking_number, "status": status_message})
+    else:
+        return jsonify({"error": "Failed to track shipment", "details": response_data}), 400
+
+
+@application.route('/login_rozetka', methods=['POST'])
+def login_rozetka():
+    try:
+        # Отримуємо дані з POST-запиту
+        data = request.json
+        access_token = data.get('access_token')
+
+        user_id = decode_access_token(access_token, SECRET_KEY).get('user_id')
+        rozetka_username = api_keys_collection.find_one({'user_id': user_id, 'type': 'rozetka'})['username']
+        rozetka_password = api_keys_collection.find_one({'user_id': user_id, 'type': 'rozetka'})['password']
+
+        # Створюємо тіло запиту для API Нової Пошти
+        payload = {'username': rozetka_username,
+                   'password': rozetka_password}
+
+        # Відправляємо запит до API
+        response = requests.post('https://api-seller.rozetka.com.ua/sites', json=payload)
+
+        # Перевіряємо, чи вдалося відправити запит
+        if response.json()['success'] is True:
+            access_token_rozetka = response.json()['content']['access_token']
+            return jsonify({'access_token_rozetka': access_token_rozetka}), 200
+        else:
+            return jsonify({"error": "Failed to connect to Rozetka API"}), response.status_code
+    except Exception as e:
+        print(traceback.format_exc())
+        return jsonify({"error": str(e)}), 500
+
+
+@application.route('/products_rozetka', methods=['POST'])
+def products_rozetka():
+    try:
+        data = request.json
+        access_token = data.get('access_token')
+        if not check_token(access_token):
+            return jsonify({'token': False}), 401
+        access_token_rozetka = data.get('access_token_rozetka')
+        page_size = data.get('page_size', 100)
+        page = data.get('page', 1)
+
+        headers = {'Authorization': f'Bearer {access_token_rozetka}',
+                   'Content-Language': 'uk'}
+        # Відправляємо запит до API
+        response = requests.get(f'https://api-seller.rozetka.com.ua/goods/all?pageSize={page_size}&page={page}', headers=headers)
+
+        # Перевіряємо, чи вдалося відправити запит
+        if response.json()['success'] is True:
+            return jsonify({'items': response.json()['content']['items']}), 200
+        else:
+            return jsonify({"error": "Failed to connect to Rozetka API"}), response.status_code
+    except Exception as e:
+        print(traceback.format_exc())
+        return jsonify({"error": str(e)}), 500
+
+
+@application.route('/products_prom', methods=['POST'])
+def products_prom():
+    try:
+        data = request.json
+        access_token = data.get('access_token')
+        if not check_token(access_token):
+            return jsonify({'token': False}), 401
+        limit = data.get('limit', 100)
+
+        user_id = decode_access_token(access_token, SECRET_KEY).get('user_id')
+        access_token_prom = api_keys_collection.find_one({'user_id': user_id, 'type': 'prom'})['token']
+
+        headers = {'Authorization': f'Bearer {access_token_prom}'}
+        # Відправляємо запит до API
+        response = requests.get(f'https://my.prom.ua/api/v1/products/list?limit={limit}', headers=headers)
+
+        # Перевіряємо, чи вдалося відправити запит
+        if response.status_code == 200:
+            return jsonify({'products': response.json()['products']}), 200
+        else:
+            return jsonify({"error": "Failed to connect to Prom API"}), response.status_code
+    except Exception as e:
+        print(traceback.format_exc())
+        return jsonify({"error": str(e)}), 500
+
+
+@application.route('/products_shopify', methods=['POST'])
+def products_shopify():
+    try:
+        data = request.json
+        access_token = data.get('access_token')
+        if not check_token(access_token):
+            return jsonify({'token': False}), 401
+        limit = data.get('limit', 50)
+
+        user_id = decode_access_token(access_token, SECRET_KEY).get('user_id')
+        access_token_shopify = api_keys_collection.find_one({'user_id': user_id, 'type': 'shopify'})['token']
+        shopify_link = api_keys_collection.find_one({'user_id': user_id, 'type': 'shopify'})['link']
+
+        headers = {'X-Shopify-Access-Token': access_token_shopify}
+        # Відправляємо запит до API
+        response = requests.get(f'https://{shopify_link}/admin/api/2024-07/products.json?limit={limit}', headers=headers)
+
+        # Перевіряємо, чи вдалося відправити запит
+        if response.status_code == 200:
+            return jsonify({'products': response.json()['products']}), 200
+        else:
+            return jsonify({"error": "Failed to connect to Shopify API"}), response.status_code
+    except Exception as e:
+        print(traceback.format_exc())
+        return jsonify({"error": str(e)}), 500
+
+
+@application.route('/receive_instagram_msg', methods=['POST', 'GET'])
+def receive_instagram_msg():
+    if request.method == 'GET':
+        if request.args.get('hub.mode') == 'subscribe' and request.args.get('hub.verify_token') == 'size_crm':
+            return request.args.get('hub.challenge')
+    elif request.method == 'POST':
+        # Receive webhook data
+        data = request.json
+
+        if data and 'entry' in data:
+            for entry in data['entry']:
+                if 'messaging' in entry:
+                    for message_event in entry['messaging']:
+                        # Extract sender ID, recipient ID, message text, and timestamp
+                        sender_id = message_event['sender']['id']
+                        recipient_id = message_event['recipient']['id']  # Extract recipient ID
+                        message_text = message_event['message'].get('text',
+                                                                    '')  # Handle cases where text may be missing
+                        timestamp = message_event['timestamp']
+
+                        # Convert timestamp to a readable datetime format
+                        message_time = datetime.fromtimestamp(timestamp / 1000.0)
+
+                        # Prepare data for MongoDB
+                        message_data = {
+                            'sender_id': sender_id,
+                            'recipient_id': recipient_id,  # Include recipient ID
+                            'message_text': message_text,
+                            'message_time': message_time
+                        }
+
+                        # Insert into MongoDB collection
+                        instagram_messages_collection.insert_one(message_data)
+
+                        # Respond to the webhook
+                        return jsonify({"message": True}), 200
+        return jsonify({"message": False}), 400
+
+
+@application.route('/get_instagram_msg', methods=['POST'])
+def get_instagram_msg():
+    data = request.json
+    access_token = data.get('access_token')
+    user_id = decode_access_token(access_token, SECRET_KEY).get('user_id')
+    recipient_id = users_collection.find_one({'_id': ObjectId(user_id)})['instagram_id']
+
+
+    # Get pagination parameters, with default values
+    page = data.get('page', 1)
+    per_page = data.get('per_page', 10)
+
+    if not check_token(access_token):
+        return jsonify({'token': False}), 401
+
+    try:
+        # Ensure page and limit are valid integers
+        page = max(1, int(page))  # page must be 1 or greater
+        limit = max(1, int(per_page))  # limit must be 1 or greater
+
+        # MongoDB aggregation to group messages by sender_id with pagination
+        pipeline = [
+            {
+                '$match': {
+                    'recipient_id': recipient_id
+                    # Replace recipient_id with the actual variable holding the recipient's ID
+                }
+            },
+            {
+                '$group': {
+                    '_id': '$sender_id',
+                    'messages': {
+                        '$push': {
+                            'message_text': '$message_text',
+                            'message_time': '$message_time'
+                        }
+                    }
+                }
+            },
+            {
+                '$skip': (page - 1) * limit  # Skip to the start of the requested page
+            },
+            {
+                '$limit': limit  # Limit the number of documents to return
+            }
+        ]
+
+        # Run aggregation
+        results = list(instagram_messages_collection.aggregate(pipeline))
+
+        # Format the response
+        grouped_messages = []
+        for result in results:
+            grouped_messages.append({
+                'sender_id': result['_id'],
+                'messages': result['messages']
+            })
+
+        # Return the paginated grouped messages
+        return jsonify({
+            'page': page,
+            'limit': limit,
+            'results': grouped_messages
+        }), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 if __name__ == '__main__':
